@@ -191,13 +191,15 @@ def start_processing(submission_id, file_path, options):
 # ---------------------------
 # Telegram helper: send messages
 # ---------------------------
+
 async def send_text(chat_id, text, reply_markup=None):
     try:
         print(f"Sending message to {chat_id}: {text}")
-        bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
         print("Message sent successfully")
     except Exception as e:
         print("send_text error:", e)
+
 
 
 def require_json(f):
