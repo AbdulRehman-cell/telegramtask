@@ -9,11 +9,11 @@ from pathlib import Path
 from functools import wraps
 import asyncio
 
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 import requests
-from telegram import Bot, Update, InputFile, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 load_dotenv()
 
@@ -30,12 +30,13 @@ if not TELEGRAM_BOT_TOKEN:
 
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
+# Initialize bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
 
 # ---------------------------
-# Simple SQLite helpers
+# Database setup
 # ---------------------------
 def get_db():
     conn = sqlite3.connect(DATABASE, check_same_thread=False)
@@ -145,7 +146,49 @@ def allowed_file(filename):
     return name.endswith(".pdf") or name.endswith(".docx")
 
 # ---------------------------
-# Mock processing (replace this with real automation later)
+# Async message sending helper
+# ---------------------------
+async def send_message_async(chat_id, text, reply_markup=None):
+    """Send message using async method"""
+    try:
+        print(f"Sending message to {chat_id}: {text}")
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        print("Message sent successfully")
+        return True
+    except Exception as e:
+        print(f"Error sending message to {chat_id}: {e}")
+        return False
+
+def send_message_sync(chat_id, text, reply_markup=None):
+    """Send message synchronously by running async function in event loop"""
+    try:
+        # Get or create event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # Run the async function in the event loop
+        if loop.is_running():
+            # If loop is already running, use run_coroutine_threadsafe
+            future = asyncio.run_coroutine_threadsafe(
+                send_message_async(chat_id, text, reply_markup), 
+                loop
+            )
+            future.result(timeout=10)  # Wait for result with timeout
+        else:
+            # If loop is not running, run until complete
+            loop.run_until_complete(
+                send_message_async(chat_id, text, reply_markup)
+            )
+        return True
+    except Exception as e:
+        print(f"Error in send_message_sync: {e}")
+        return False
+
+# ---------------------------
+# Mock processing
 # ---------------------------
 def mock_process_file(submission_id, file_path, options):
     """
@@ -156,9 +199,9 @@ def mock_process_file(submission_id, file_path, options):
     db.commit()
 
     # Simulate a delay for upload + processing
-    time.sleep(8)  # simulate upload + waiting for report
+    time.sleep(8)
 
-    # Create a fake PDF report (a tiny PDF)
+    # Create a fake PDF report
     from PyPDF2 import PdfWriter
     writer = PdfWriter()
     writer.add_blank_page(width=200, height=200)
@@ -178,50 +221,26 @@ def mock_process_file(submission_id, file_path, options):
             caption = f"✅ Report ready for {r['filename']}\nSimilarity: {10 + (submission_id % 10)}%\nAI Score: {5 + (submission_id % 5)}%"
             with open(report_path, "rb") as f:
                 # Use sync method for background threads
-                bot.send_document(chat_id=user_id, document=InputFile(f, filename=os.path.basename(report_path)), caption=caption)
+                asyncio.run(bot.send_document(
+                    chat_id=user_id, 
+                    document=InputFile(f, filename=os.path.basename(report_path)), 
+                    caption=caption
+                ))
         except Exception as e:
             print("Error sending report:", e)
 
-# ---------------------------
-# Background worker for submissions
-# ---------------------------
 def start_processing(submission_id, file_path, options):
     t = threading.Thread(target=mock_process_file, args=(submission_id, file_path, options), daemon=True)
     t.start()
 
 # ---------------------------
-# Telegram helper: send messages - SIMPLIFIED SYNC VERSION
+# Flask routes
 # ---------------------------
-
-def send_message(chat_id, text, reply_markup=None):
-    """Send message synchronously - safe for use in Flask routes"""
-    try:
-        print(f"Sending message to {chat_id}: {text}")
-        # Use the synchronous approach
-        bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
-        print("Message sent successfully")
-        return True
-    except Exception as e:
-        print(f"Error sending message to {chat_id}: {e}")
-        return False
-
-def require_json(f):
-    @wraps(f)
-    def inner(*args, **kwargs):
-        if not request.is_json:
-            return jsonify({"error":"expected application/json"}), 400
-        return f(*args, **kwargs)
-    return inner
-
-# ---------------------------
-# Flask routes: Webhook for Telegram - SIMPLIFIED SYNC VERSION
-# ---------------------------
-  
 @app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
     try:
         update_data = request.get_json(force=True)
-        print(f"Received webhook: {update_data}")
+        print(f"Received webhook from user")
         
         update = Update.de_json(update_data, bot)
         
@@ -231,53 +250,49 @@ def telegram_webhook():
             
             print(f"Processing message from user {user_id}: {text}")
             
-            # Commands
+            # Handle commands
             if text.startswith("/start"):
-                send_message(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin.")
+                send_message_sync(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin.")
                 return "ok", 200
                 
             if text.startswith("/id"):
                 u = user_get(user_id)
                 reply = f"👤 Your Account Info:\nUser ID: {user_id}\nPlan: {u['plan']}\nDaily Total Checks: {u['daily_limit']} - {u['used_today']}\nSubscription ends: {u['expiry_date'] or 'N/A'}"
-                send_message(user_id, reply)
+                send_message_sync(user_id, reply)
                 return "ok", 200
                 
             if text.startswith("/upgrade"):
-                # Check capacity before showing Paystack link
                 plan = "Premium"
                 plan_checks = 5
                 galloc = global_alloc()
                 gmax = int(meta_get("global_max", "50"))
                 if galloc + plan_checks > gmax:
-                    send_message(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later.")
+                    send_message_sync(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later.")
                     return "ok", 200
                     
-                # Reserve slot for 10 minutes
                 now = now_ts()
                 expires = now + 10*60
                 cur = db.cursor()
                 cur.execute("INSERT INTO reservations(user_id, plan, created_at, expires_at, reference) VALUES(?,?,?,?,?)",
                             (user_id, plan, now, expires, "tempref_"+str(now)))
                 db.commit()
-                # increment global allocation tentatively
                 global_alloc_add(plan_checks)
-                # generate a fake Paystack link (replace with real link creation)
+                
                 pay_link = f"https://paystack.com/pay/fakepay?ref=tempref_{now}"
                 markup = InlineKeyboardMarkup([[InlineKeyboardButton("Pay (Sandbox)", url=pay_link)]])
-                send_message(user_id, f"Your slot is reserved for 10 minutes. Click the button to pay for {plan}.", reply_markup=markup)
+                send_message_sync(user_id, f"Your slot is reserved for 10 minutes. Click the button to pay for {plan}.", reply_markup=markup)
                 return "ok", 200
                 
             if text.startswith("/cancel"):
-                # Cancel user's running submission
                 cur = db.cursor()
                 cur.execute("SELECT id FROM submissions WHERE user_id=? AND status='processing' ORDER BY created_at DESC LIMIT 1", (user_id,))
                 row = cur.fetchone()
                 if row:
                     cur.execute("UPDATE submissions SET status=? WHERE id=?", ("cancelled", row["id"]))
                     db.commit()
-                    send_message(user_id, "❌ Your check has been cancelled.")
+                    send_message_sync(user_id, "❌ Your check has been cancelled.")
                 else:
-                    send_message(user_id, "You have no running checks.")
+                    send_message_sync(user_id, "You have no running checks.")
                 return "ok", 200
 
             # Handle file uploads
@@ -285,33 +300,31 @@ def telegram_webhook():
                 doc = update.message.document
                 filename = doc.file_name or f"file_{now_ts()}"
                 if not allowed_file(filename):
-                    send_message(user_id, "⚠️ Only .pdf and .docx files are allowed.")
+                    send_message_sync(user_id, "⚠️ Only .pdf and .docx files are allowed.")
                     return "ok", 200
 
                 u = user_get(user_id)
-                # cooldown check
                 last = u["last_submission"] or 0
                 if now_ts() - last < 60:
-                    send_message(user_id, "⏳ Please wait 1 minute before submitting another document.")
+                    send_message_sync(user_id, "⏳ Please wait 1 minute before submitting another document.")
                     return "ok", 200
 
-                # daily limit
                 if u["used_today"] >= u["daily_limit"]:
-                    send_message(user_id, "⚠️ You've reached your daily limit. Subscribe to continue using TurnitQ.")
+                    send_message_sync(user_id, "⚠️ You've reached your daily limit. Subscribe to continue using TurnitQ.")
                     return "ok", 200
 
-                # accept file: download it
+                # Download file
                 file_obj = bot.get_file(doc.file_id)
                 local_path = str(TEMP_DIR / f"{user_id}_{int(time.time())}_{filename}")
                 try:
                     file_obj.download(custom_path=local_path)
                     print(f"File downloaded to: {local_path}")
                 except Exception as e:
-                    send_message(user_id, "Failed to download file. Try again.")
-                    print("download error", e)
+                    send_message_sync(user_id, "Failed to download file. Try again.")
+                    print("Download error:", e)
                     return "ok", 200
 
-                # create submission record
+                # Create submission record
                 created = now_ts()
                 cur = db.cursor()
                 cur.execute("INSERT INTO submissions(user_id, filename, status, created_at) VALUES(?,?,?,?)",
@@ -319,12 +332,10 @@ def telegram_webhook():
                 sub_id = cur.lastrowid
                 db.commit()
 
-                # update user last_submission and usage
                 cur.execute("UPDATE users SET last_submission=?, used_today=used_today+1 WHERE user_id=?", (created, user_id))
                 db.commit()
 
-                send_message(user_id, "✅ File received. Checking with TurnitQ — please wait a few seconds…")
-                # kick off background processing (mock)
+                send_message_sync(user_id, "✅ File received. Checking with TurnitQ — please wait a few seconds…")
                 start_processing(sub_id, local_path, options={})
                 return "ok", 200
 
@@ -338,11 +349,8 @@ def telegram_webhook():
 
 @app.route("/")
 def greet():
-    return f"Bot is running with token: {TELEGRAM_BOT_TOKEN[:10]}..."
+    return "Bot is running!"
 
-# ---------------------------
-# Paystack webhook (test)
-# ---------------------------
 @app.route("/paystack/webhook", methods=["POST"])
 def paystack_webhook():
     try:
@@ -350,11 +358,8 @@ def paystack_webhook():
         if not data:
             return "", 400
             
-        ev = data.get("event")
-        payload = data.get("data", {})
-        ref = payload.get("reference")
+        ref = data.get("data", {}).get("reference")
         
-        # find reservation
         cur = db.cursor()
         row = cur.execute("SELECT * FROM reservations WHERE reference=? OR reference LIKE ?", (ref, f"%{ref}%")).fetchone()
         if not row:
@@ -362,25 +367,20 @@ def paystack_webhook():
 
         user_id = row["user_id"]
         plan = row["plan"]
-        # for demo set plan attributes
         plan_map = {"Premium": (5, 28), "Pro": (30, 28), "Elite": (100, 28)}
         checks, days = plan_map.get(plan, (5, 28))
-        # activate plan for user
+        
         set_user_plan(user_id, plan, checks, days=days)
-        # remove reservation
         cur.execute("DELETE FROM reservations WHERE id=?", (row["id"],))
         db.commit()
-        # send confirmation
-        send_message(user_id, f"✅ You're now on {plan}!\nActive until { (datetime.datetime.utcnow() + datetime.timedelta(days=days)).date() }\nYou have {checks} checks per day.")
+        
+        send_message_sync(user_id, f"✅ You're now on {plan}!\nActive until { (datetime.datetime.utcnow() + datetime.timedelta(days=days)).date() }\nYou have {checks} checks per day.")
         return jsonify({"status":"success"}), 200
         
     except Exception as e:
         print("Error in paystack_webhook:", e)
         return jsonify({"status":"error"}), 500
 
-# ---------------------------
-# Admin / debug endpoints
-# ---------------------------
 @app.route("/admin/stats", methods=["GET"])
 def admin_stats():
     cur = db.cursor()
@@ -389,7 +389,7 @@ def admin_stats():
     return jsonify({"total_users": total_users, "global_alloc": alloc})
 
 # ---------------------------
-# Scheduler jobs
+# Scheduler
 # ---------------------------
 scheduler = BackgroundScheduler()
 
@@ -397,16 +397,12 @@ def reset_daily():
     cur = db.cursor()
     cur.execute("UPDATE users SET used_today=0")
     db.commit()
-    # reset global alloc as well
     meta_set("global_alloc", "0")
     print("Daily reset performed at", datetime.datetime.utcnow())
 
-scheduler.add_job(reset_daily, 'cron', hour=0)  # runs at midnight UTC
+scheduler.add_job(reset_daily, 'cron', hour=0)
 scheduler.start()
 
-# ---------------------------
-# helper to set webhook (manual step)
-# ---------------------------
 def set_webhook():
     try:
         url = f"{WEBHOOK_BASE_URL}/webhook/{TELEGRAM_BOT_TOKEN}"
@@ -417,6 +413,5 @@ def set_webhook():
         print(f"Error setting webhook: {e}")
 
 if __name__ == "__main__":
-    # for local testing, you can call set_webhook() once (if WEBHOOK_BASE_URL is reachable).
     set_webhook()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
