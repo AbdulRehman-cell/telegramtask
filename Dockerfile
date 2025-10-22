@@ -1,7 +1,13 @@
 FROM python:3.11-slim
+
 WORKDIR /app
-COPY . /app
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "app:app", "--workers", "1", "--threads", "4"]
