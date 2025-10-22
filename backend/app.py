@@ -217,7 +217,7 @@ def telegram_webhook():
         # Commands
         if text.startswith("/start"):
             send_text(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin.")
-            return "", 200
+            return "hello", 200
         if text.startswith("/id"):
             u = user_get(user_id)
             reply = f"👤 Your Account Info:\nUser ID: {user_id}\nPlan: {u['plan']}\nDaily Total Checks: {u['daily_limit']} - {u['used_today']}\nSubscription ends: {u['expiry_date'] or 'N/A'}"
