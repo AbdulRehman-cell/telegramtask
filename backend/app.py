@@ -7,13 +7,11 @@ import datetime
 import sqlite3
 from pathlib import Path
 from functools import wraps
-import asyncio
 
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 import requests
-from telegram import Bot, Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 load_dotenv()
 
@@ -31,8 +29,6 @@ print(f"🌐 Webhook base: {WEBHOOK_BASE_URL}")
 TEMP_DIR = Path(os.getenv("TEMP_DIR", "/tmp/turnitq"))
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# Initialize bot
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
 
@@ -68,34 +64,17 @@ def init_db():
         options TEXT,
         is_free_check BOOLEAN DEFAULT 0
     );
-    CREATE TABLE IF NOT EXISTS reservations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        plan TEXT,
-        created_at INTEGER,
-        expires_at INTEGER,
-        reference TEXT
-    );
-    CREATE TABLE IF NOT EXISTS meta (
-        k TEXT PRIMARY KEY,
-        v TEXT
-    );
     CREATE TABLE IF NOT EXISTS user_sessions (
         user_id INTEGER PRIMARY KEY,
         waiting_for_options BOOLEAN DEFAULT 0,
         current_file_path TEXT,
-        current_filename TEXT
+        current_filename TEXT,
+        current_file_id TEXT
     );
     """)
     db.commit()
 
 init_db()
-
-# Initialize global daily allocation
-if not db.execute("SELECT 1 FROM meta WHERE k='global_alloc'").fetchone():
-    db.execute("INSERT INTO meta(k,v) VALUES('global_alloc','0')")
-    db.execute("INSERT INTO meta(k,v) VALUES('global_max','50')")
-    db.commit()
 
 # ---------------------------
 # Utilities
@@ -132,10 +111,10 @@ def allowed_file(filename):
     return filename.lower().endswith((".pdf", ".docx"))
 
 # ---------------------------
-# Message sending - SIMPLE SYNC VERSION
+# Telegram API - DIRECT HTTP REQUESTS (No async)
 # ---------------------------
 def send_telegram_message(chat_id, text, reply_markup=None):
-    """Send message using requests directly to Telegram API"""
+    """Send message using direct HTTP requests"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
@@ -145,7 +124,7 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         }
         
         if reply_markup:
-            payload["reply_markup"] = json.dumps(reply_markup.to_dict())
+            payload["reply_markup"] = json.dumps(reply_markup)
         
         response = requests.post(url, json=payload, timeout=10)
         result = response.json()
@@ -160,6 +139,79 @@ def send_telegram_message(chat_id, text, reply_markup=None):
     except Exception as e:
         print(f"❌ Error sending message: {e}")
         return False
+
+def download_telegram_file(file_id, destination_path):
+    """Download file from Telegram using direct HTTP requests"""
+    try:
+        # Get file path
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile"
+        response = requests.post(url, json={"file_id": file_id})
+        result = response.json()
+        
+        if not result.get("ok"):
+            print(f"❌ Failed to get file path: {result}")
+            return False
+            
+        file_path = result["result"]["file_path"]
+        
+        # Download file
+        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+        response = requests.get(download_url, stream=True)
+        
+        if response.status_code == 200:
+            with open(destination_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"✅ File downloaded to: {destination_path}")
+            return True
+        else:
+            print(f"❌ Failed to download file: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error downloading file: {e}")
+        return False
+
+def send_telegram_document(chat_id, document_path, caption=None, filename=None):
+    """Send document using direct HTTP requests"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+        
+        with open(document_path, 'rb') as document:
+            files = {'document': (filename or os.path.basename(document_path), document)}
+            data = {'chat_id': chat_id}
+            if caption:
+                data['caption'] = caption
+                
+            response = requests.post(url, files=files, data=data)
+            result = response.json()
+            
+            if result.get("ok"):
+                print(f"✅ Document sent to {chat_id}")
+                return True
+            else:
+                print(f"❌ Failed to send document: {result}")
+                return False
+                
+    except Exception as e:
+        print(f"❌ Error sending document: {e}")
+        return False
+
+# ---------------------------
+# Inline Keyboard Helper
+# ---------------------------
+def create_inline_keyboard(buttons):
+    """Create inline keyboard markup"""
+    keyboard = []
+    for button_row in buttons:
+        row = []
+        for button in button_row:
+            row.append({
+                "text": button[0],
+                "callback_data": button[1]
+            })
+        keyboard.append(row)
+    return {"inline_keyboard": keyboard}
 
 # ---------------------------
 # Report Options and Processing
@@ -219,20 +271,35 @@ def mock_process_file(submission_id, file_path, options):
         similarity_report_path = str(TEMP_DIR / f"similarity_report_{submission_id}.pdf")
         ai_report_path = str(TEMP_DIR / f"ai_report_{submission_id}.pdf")
         
-        # Create fake PDFs
-        from PyPDF2 import PdfWriter
-        
-        # Similarity report
-        writer1 = PdfWriter()
-        writer1.add_blank_page(width=600, height=800)
-        with open(similarity_report_path, "wb") as f:
-            writer1.write(f)
+        # Create fake PDFs (using reportlab as it's more commonly available)
+        try:
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import letter
             
-        # AI report  
-        writer2 = PdfWriter()
-        writer2.add_blank_page(width=600, height=800)
-        with open(ai_report_path, "wb") as f:
-            writer2.write(f)
+            # Similarity report
+            c = canvas.Canvas(similarity_report_path, pagesize=letter)
+            c.drawString(100, 750, f"Similarity Report for: {filename}")
+            c.drawString(100, 730, f"Similarity Score: {10 + (submission_id % 15)}%")
+            c.drawString(100, 710, f"AI Detection Score: {5 + (submission_id % 10)}%")
+            c.drawString(100, 690, "Options Applied:")
+            c.drawString(100, 670, f"Exclude Bibliography: {options['exclude_bibliography']}")
+            c.drawString(100, 650, f"Exclude Quoted Text: {options['exclude_quoted_text']}")
+            c.drawString(100, 630, f"Exclude Cited Text: {options['exclude_cited_text']}")
+            c.drawString(100, 610, f"Exclude Small Matches: {options['exclude_small_matches']}")
+            c.save()
+            
+            # AI report
+            c = canvas.Canvas(ai_report_path, pagesize=letter)
+            c.drawString(100, 750, f"AI Writing Analysis for: {filename}")
+            c.drawString(100, 730, "This report analyzes the document for AI-generated content.")
+            c.drawString(100, 710, f"AI Probability Score: {5 + (submission_id % 10)}%")
+            c.drawString(100, 690, "Analysis completed successfully.")
+            c.save()
+            
+        except ImportError:
+            # Fallback: create empty files if reportlab not available
+            open(similarity_report_path, 'w').close()
+            open(ai_report_path, 'w').close()
 
         # Update submission
         cur.execute("UPDATE submissions SET status=?, report_path=? WHERE id=?", ("done", similarity_report_path, submission_id))
@@ -254,29 +321,31 @@ def mock_process_file(submission_id, file_path, options):
         )
         
         # Send similarity report
-        with open(similarity_report_path, "rb") as f:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-            files = {'document': (f"similarity_report_{filename}.pdf", f)}
-            data = {'chat_id': user_id, 'caption': caption}
-            requests.post(url, files=files, data=data)
+        send_telegram_document(
+            user_id, 
+            similarity_report_path, 
+            caption=caption,
+            filename=f"similarity_report_{filename}.pdf"
+        )
         
         # Send AI report
-        with open(ai_report_path, "rb") as f:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-            files = {'document': (f"ai_report_{filename}.pdf", f)}
-            data = {'chat_id': user_id, 'caption': "🤖 AI Writing Analysis Report"}
-            requests.post(url, files=files, data=data)
+        send_telegram_document(
+            user_id,
+            ai_report_path,
+            caption="🤖 AI Writing Analysis Report",
+            filename=f"ai_analysis_{filename}.pdf"
+        )
         
         # Show upgrade message if it was a free check
         if is_free_check:
-            upgrade_markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 Upgrade Plan", callback_data="upgrade_after_free")]
+            upgrade_keyboard = create_inline_keyboard([
+                [("💎 Upgrade Plan", "upgrade_after_free")]
             ])
             send_telegram_message(
                 user_id,
                 "🎁 Your first check was free!\n\n"
                 "To unlock more checks and full reports for the next 28 days, upgrade below 👇",
-                reply_markup=upgrade_markup
+                reply_markup=upgrade_keyboard
             )
             
     except Exception as e:
@@ -304,21 +373,10 @@ def home():
 @app.route("/debug")
 def debug():
     webhook_url = f"{WEBHOOK_BASE_URL}/webhook/{TELEGRAM_BOT_TOKEN}"
-    webhook_status = "❓ Unknown"
-    
-    try:
-        response = requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo")
-        webhook_info = response.json()
-        webhook_status = "✅ Active" if webhook_info.get("result", {}).get("url") else "❌ Inactive"
-    except:
-        webhook_status = "❌ Error checking"
-    
     return f"""
     <h1>Debug Information</h1>
-    <p><strong>Webhook Status:</strong> {webhook_status}</p>
     <p><strong>Webhook URL:</strong> <code>{webhook_url}</code></p>
-    <p><strong>Bot Token:</strong> <code>{TELEGRAM_BOT_TOKEN[:10]}...</code></p>
-    <p><a href="https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo" target="_blank">View Detailed Webhook Info</a></p>
+    <p><a href="https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo" target="_blank">Check Webhook Status</a></p>
     """
 
 @app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST", "GET"])
@@ -328,19 +386,19 @@ def telegram_webhook():
     
     try:
         update_data = request.get_json(force=True)
-        print(f"📥 Received update: {json.dumps(update_data, indent=2)}")
+        print(f"📥 Received webhook data")
         
-        update = Update.de_json(update_data, bot)
-        
-        if update.message:
-            user_id = update.message.from_user.id
-            text = update.message.text or ""
+        # Extract basic info from update
+        if 'message' in update_data:
+            message = update_data['message']
+            user_id = message['from']['id']
+            text = message.get('text', '')
             
             print(f"👤 User {user_id} sent: {text}")
             
             # Check if user is waiting for options
             session = get_user_session(user_id)
-            if session['waiting_for_options']:
+            if session['waiting_for_options'] and text:
                 options = parse_options_response(text)
                 if options:
                     # Process the file with options
@@ -367,10 +425,15 @@ def telegram_webhook():
                     )
                     db.commit()
 
-                    send_telegram_message(user_id, "✅ File received. Checking with Turnitin — please wait a few seconds…")
+                    # Download the file using stored file_id
+                    local_path = str(TEMP_DIR / f"{user_id}_{now_ts()}_{session['current_filename']}")
+                    if download_telegram_file(session['current_file_id'], local_path):
+                        send_telegram_message(user_id, "✅ File received. Checking with Turnitin — please wait a few seconds…")
+                        # Start processing with options
+                        start_processing(sub_id, local_path, options)
+                    else:
+                        send_telegram_message(user_id, "❌ Failed to process file. Please try again.")
                     
-                    # Start processing with options
-                    start_processing(sub_id, session['current_file_path'], options)
                     return "ok", 200
                 else:
                     send_telegram_message(
@@ -420,10 +483,10 @@ def telegram_webhook():
                 return "ok", 200
                 
             elif text.startswith("/upgrade"):
-                markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💎 Premium - 5 checks/day", callback_data="premium")],
-                    [InlineKeyboardButton("🚀 Pro - 30 checks/day", callback_data="pro")],
-                    [InlineKeyboardButton("🏆 Elite - 100 checks/day", callback_data="elite")]
+                keyboard = create_inline_keyboard([
+                    [("💎 Premium - 5 checks/day", "premium")],
+                    [("🚀 Pro - 30 checks/day", "pro")],
+                    [("🏆 Elite - 100 checks/day", "elite")]
                 ])
                 send_telegram_message(
                     user_id,
@@ -432,7 +495,7 @@ def telegram_webhook():
                     "🚀 Pro: 30 checks per day\n"
                     "🏆 Elite: 100 checks per day\n\n"
                     "Click a button below to upgrade:",
-                    reply_markup=markup
+                    reply_markup=keyboard
                 )
                 return "ok", 200
                 
@@ -441,9 +504,10 @@ def telegram_webhook():
                 return "ok", 200
 
             # Handle file uploads
-            elif update.message.document:
-                doc = update.message.document
-                filename = doc.file_name or f"file_{now_ts()}"
+            elif 'document' in message:
+                doc = message['document']
+                filename = doc.get('file_name', f"file_{now_ts()}")
+                file_id = doc['file_id']
                 
                 if not allowed_file(filename):
                     send_telegram_message(user_id, "⚠️ Only .pdf and .docx files are allowed.")
@@ -460,23 +524,12 @@ def telegram_webhook():
                     )
                     return "ok", 200
 
-                # Download file
-                try:
-                    file_obj = bot.get_file(doc.file_id)
-                    local_path = str(TEMP_DIR / f"{user_id}_{now_ts()}_{filename}")
-                    file_obj.download(custom_path=local_path)
-                    print(f"📥 File saved: {local_path}")
-                except Exception as e:
-                    send_telegram_message(user_id, "❌ Failed to download file. Please try again.")
-                    print(f"Download error: {e}")
-                    return "ok", 200
-
                 # Store file info and ask for options
                 update_user_session(
                     user_id, 
                     waiting_for_options=1,
-                    current_file_path=local_path,
-                    current_filename=filename
+                    current_filename=filename,
+                    current_file_id=file_id
                 )
                 
                 ask_for_report_options(user_id)
@@ -496,9 +549,10 @@ def telegram_webhook():
                 return "ok", 200
 
         # Handle callback queries (button clicks)
-        if update.callback_query:
-            user_id = update.callback_query.from_user.id
-            data = update.callback_query.data
+        elif 'callback_query' in update_data:
+            callback = update_data['callback_query']
+            user_id = callback['from']['id']
+            data = callback['data']
             
             if data == "premium":
                 send_telegram_message(user_id, "💎 You selected Premium plan!\n\nThis would redirect to payment in a real implementation.")
@@ -507,10 +561,10 @@ def telegram_webhook():
             elif data == "elite":
                 send_telegram_message(user_id, "🏆 You selected Elite plan!\n\nThis would redirect to payment in a real implementation.")
             elif data == "upgrade_after_free":
-                markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💎 Premium - 5 checks/day", callback_data="premium")],
-                    [InlineKeyboardButton("🚀 Pro - 30 checks/day", callback_data="pro")],
-                    [InlineKeyboardButton("🏆 Elite - 100 checks/day", callback_data="elite")]
+                keyboard = create_inline_keyboard([
+                    [("💎 Premium - 5 checks/day", "premium")],
+                    [("🚀 Pro - 30 checks/day", "pro")],
+                    [("🏆 Elite - 100 checks/day", "elite")]
                 ])
                 send_telegram_message(
                     user_id,
@@ -518,7 +572,7 @@ def telegram_webhook():
                     "💎 Premium: 5 checks per day\n"
                     "🚀 Pro: 30 checks per day\n"
                     "🏆 Elite: 100 checks per day",
-                    reply_markup=markup
+                    reply_markup=keyboard
                 )
                 
         return "ok", 200
@@ -561,7 +615,6 @@ scheduler = BackgroundScheduler()
 
 def reset_daily_usage():
     db.execute("UPDATE users SET used_today=0")
-    db.execute("UPDATE meta SET v='0' WHERE k='global_alloc'")
     db.commit()
     print("🔄 Daily usage reset")
 
