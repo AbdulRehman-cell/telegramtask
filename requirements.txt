@@ -1,0 +1,8 @@
+python-telegram-bot>=20.0
+fastapi
+uvicorn[standard]
+aiofiles
+apscheduler
+python-multipart
+pydantic
+playwright==1.36.0 # optional; not used by scaffold but handy later
