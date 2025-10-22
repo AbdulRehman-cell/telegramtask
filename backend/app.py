@@ -382,6 +382,6 @@ def set_webhook():
     print("setWebhook response:", r.text)
 
 if __name__ == "__main__":
-    # for local testing, you can call set_webhook() once (if WEBHOOK_BASE_URL is reachable).
-    # set_webhook()
+# for local testing, you can call set_webhook() once (if WEBHOOK_BASE_URL is reachable).
+    set_webhook()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
