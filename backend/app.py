@@ -231,12 +231,12 @@ def telegram_webhook():
         text = update.message.text or ""
         # Commands
         if text.startswith("/start"):
-            asyncio.run(schedule_send(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin."))
+            (schedule_send(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin."))
             return "hello", 200
         if text.startswith("/id"):
             u = user_get(user_id)
             reply = f"👤 Your Account Info:\nUser ID: {user_id}\nPlan: {u['plan']}\nDaily Total Checks: {u['daily_limit']} - {u['used_today']}\nSubscription ends: {u['expiry_date'] or 'N/A'}"
-            asyncio.run(schedule_send(user_id, reply))
+            (schedule_send(user_id, reply))
             return "hello", 200
         if text.startswith("/upgrade"):
             # Check capacity before showing Paystack link
@@ -245,7 +245,7 @@ def telegram_webhook():
             galloc = global_alloc()
             gmax = int(meta_get("global_max", "50"))
             if galloc + plan_checks > gmax:
-                asyncio.run(schedule_send(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later."))
+                (schedule_send(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later."))
                 return "", 200
             # Reserve slot for 10 minutes
             now = now_ts()
