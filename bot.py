@@ -13,6 +13,16 @@ from telegram.ext import (
 from db import ensure_user, create_job, increment_used, init_db
 from utils import allowed_file, in_cooldown, set_cooldown_seconds
 
+# in bot.py
+from telegram.ext import ApplicationBuilder, CommandHandler
+
+app = ApplicationBuilder().token("8291206067:AAFffXWUa7u5FBCqoUnOySIDre9KwpNXP3g").build()
+app.add_handler(CommandHandler("start", start))
+# etc.
+
+# Set webhook URL (your Render web service)
+await app.bot.set_webhook("https://telegramtask-1.onrender.com//webhook")
+
 TEMP_PATH = "uploads"
 TELEGRAM_TOKEN = os.getenv("8291206067:AAFffXWUa7u5FBCqoUnOySIDre9KwpNXP3g")
 
