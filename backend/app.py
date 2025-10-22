@@ -8,7 +8,16 @@ import sqlite3
 from pathlib import Path
 from functools import wraps
 import asyncio
-loop = asyncio.get_event_loop()
+
+# Create event loop properly
+try:
+    loop = asyncio.get_event_loop()
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
 from flask import Flask, request, jsonify, abort
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -178,6 +187,7 @@ def mock_process_file(submission_id, file_path, options):
         try:
             caption = f"✅ Report ready for {r['filename']}\nSimilarity: {10 + (submission_id % 10)}%\nAI Score: {5 + (submission_id % 5)}%"
             with open(report_path, "rb") as f:
+                # Use sync method instead of async for background threads
                 bot.send_document(chat_id=user_id, document=InputFile(f, filename=os.path.basename(report_path)), caption=caption)
         except Exception as e:
             print("Error sending report:", e)
@@ -190,24 +200,39 @@ def start_processing(submission_id, file_path, options):
     t.start()
 
 # ---------------------------
-# Telegram helper: send messages
+# Telegram helper: send messages - FIXED VERSION
 # ---------------------------
 
-async def send_text(chat_id, text, reply_markup=None):
+def send_message_sync(chat_id, text, reply_markup=None):
+    """Send message synchronously - safe for use in Flask routes"""
     try:
         print(f"Sending message to {chat_id}: {text}")
-        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
         print("Message sent successfully")
     except Exception as e:
-        print("schedule_send error:", e)
-        
-        
+        print("send_message_sync error:", e)
+
+async def send_message_async(chat_id, text, reply_markup=None):
+    """Send message asynchronously"""
+    try:
+        print(f"Sending async message to {chat_id}: {text}")
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        print("Async message sent successfully")
+    except Exception as e:
+        print("send_message_async error:", e)
 
 def schedule_send(chat_id, text, reply_markup=None):
-    """Schedule an async schedule_send without blocking Flask."""
-    asyncio.run_coroutine_threadsafe(send_text(chat_id, text, reply_markup), loop)
-
-
+    """Schedule message sending without blocking Flask"""
+    try:
+        # Use the thread-safe method
+        asyncio.run_coroutine_threadsafe(
+            send_message_async(chat_id, text, reply_markup), 
+            loop
+        )
+    except Exception as e:
+        print("schedule_send error:", e)
+        # Fallback to sync method if async fails
+        send_message_sync(chat_id, text, reply_markup)
 
 def require_json(f):
     @wraps(f)
@@ -218,147 +243,161 @@ def require_json(f):
     return inner
 
 # ---------------------------
-# Flask routes: Webhook for Telegram
+# Flask routes: Webhook for Telegram - FIXED VERSION
 # ---------------------------
-  
   
 @app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    # handle commands and messages quickly; offload heavy work
-    if update.message:
-        user_id = update.message.from_user.id
-        text = update.message.text or ""
-        # Commands
-        if text.startswith("/start"):
-            (schedule_send(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin."))
-            return "hello", 200
-        if text.startswith("/id"):
-            u = user_get(user_id)
-            reply = f"👤 Your Account Info:\nUser ID: {user_id}\nPlan: {u['plan']}\nDaily Total Checks: {u['daily_limit']} - {u['used_today']}\nSubscription ends: {u['expiry_date'] or 'N/A'}"
-            (schedule_send(user_id, reply))
-            return "hello", 200
-        if text.startswith("/upgrade"):
-            # Check capacity before showing Paystack link
-            plan = "Premium"
-            plan_checks = 5
-            galloc = global_alloc()
-            gmax = int(meta_get("global_max", "50"))
-            if galloc + plan_checks > gmax:
-                (schedule_send(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later."))
-                return "", 200
-            # Reserve slot for 10 minutes
-            now = now_ts()
-            expires = now + 10*60
-            cur = db.cursor()
-            cur.execute("INSERT INTO reservations(user_id, plan, created_at, expires_at, reference) VALUES(?,?,?,?,?)",
-                        (user_id, plan, now, expires, "tempref_"+str(now)))
-            db.commit()
-            # increment global allocation tentatively
-            global_alloc_add(plan_checks)
-            # generate a fake Paystack link (replace with real link creation)
-            pay_link = f"https://paystack.com/pay/fakepay?ref=tempref_{now}"
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("Pay (Sandbox)", url=pay_link)]])
-            asyncio.run(schedule_send(user_id, f"Your slot is reserved for 10 minutes. Click the button to pay for {plan}.", reply_markup=markup))
-            return "", 200
-        if text.startswith("/cancel"):
-            # Cancel user's running submission (simple implementation: mark last submission cancelled)
-            cur = db.cursor()
-            cur.execute("SELECT id FROM submissions WHERE user_id=? AND status='processing' ORDER BY created_at DESC LIMIT 1", (user_id,))
-            row = cur.fetchone()
-            if row:
-                cur.execute("UPDATE submissions SET status=? WHERE id=?", ("cancelled", row["id"]))
+    try:
+        update = Update.de_json(request.get_json(force=True), bot)
+        
+        if update.message:
+            user_id = update.message.from_user.id
+            text = update.message.text or ""
+            
+            # Commands - use sync method for immediate response
+            if text.startswith("/start"):
+                send_message_sync(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin.")
+                return "ok", 200
+                
+            if text.startswith("/id"):
+                u = user_get(user_id)
+                reply = f"👤 Your Account Info:\nUser ID: {user_id}\nPlan: {u['plan']}\nDaily Total Checks: {u['daily_limit']} - {u['used_today']}\nSubscription ends: {u['expiry_date'] or 'N/A'}"
+                send_message_sync(user_id, reply)
+                return "ok", 200
+                
+            if text.startswith("/upgrade"):
+                # Check capacity before showing Paystack link
+                plan = "Premium"
+                plan_checks = 5
+                galloc = global_alloc()
+                gmax = int(meta_get("global_max", "50"))
+                if galloc + plan_checks > gmax:
+                    send_message_sync(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later.")
+                    return "ok", 200
+                    
+                # Reserve slot for 10 minutes
+                now = now_ts()
+                expires = now + 10*60
+                cur = db.cursor()
+                cur.execute("INSERT INTO reservations(user_id, plan, created_at, expires_at, reference) VALUES(?,?,?,?,?)",
+                            (user_id, plan, now, expires, "tempref_"+str(now)))
                 db.commit()
-                schedule_send(user_id, "❌ Your check has been cancelled.")
-            else:
-                schedule_send(user_id, "You have no running checks.")
-            return "", 200
+                # increment global allocation tentatively
+                global_alloc_add(plan_checks)
+                # generate a fake Paystack link (replace with real link creation)
+                pay_link = f"https://paystack.com/pay/fakepay?ref=tempref_{now}"
+                markup = InlineKeyboardMarkup([[InlineKeyboardButton("Pay (Sandbox)", url=pay_link)]])
+                send_message_sync(user_id, f"Your slot is reserved for 10 minutes. Click the button to pay for {plan}.", reply_markup=markup)
+                return "ok", 200
+                
+            if text.startswith("/cancel"):
+                # Cancel user's running submission
+                cur = db.cursor()
+                cur.execute("SELECT id FROM submissions WHERE user_id=? AND status='processing' ORDER BY created_at DESC LIMIT 1", (user_id,))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("UPDATE submissions SET status=? WHERE id=?", ("cancelled", row["id"]))
+                    db.commit()
+                    send_message_sync(user_id, "❌ Your check has been cancelled.")
+                else:
+                    send_message_sync(user_id, "You have no running checks.")
+                return "ok", 200
 
-        # Otherwise, handle file uploads
-        if update.message.document:
-            doc = update.message.document
-            filename = doc.file_name or f"file_{now_ts()}"
-            if not allowed_file(filename):
-                schedule_send(user_id, "⚠️ Only .pdf and .docx files are allowed.")
-                return "", 200
+            # Handle file uploads
+            if update.message.document:
+                doc = update.message.document
+                filename = doc.file_name or f"file_{now_ts()}"
+                if not allowed_file(filename):
+                    send_message_sync(user_id, "⚠️ Only .pdf and .docx files are allowed.")
+                    return "ok", 200
 
-            u = user_get(user_id)
-            # cooldown check
-            last = u["last_submission"] or 0
-            if now_ts() - last < 60:
-                schedule_send(user_id, "⏳ Please wait 1 minute before submitting another document.")
-                return "", 200
+                u = user_get(user_id)
+                # cooldown check
+                last = u["last_submission"] or 0
+                if now_ts() - last < 60:
+                    send_message_sync(user_id, "⏳ Please wait 1 minute before submitting another document.")
+                    return "ok", 200
 
-            # daily limit
-            if u["used_today"] >= u["daily_limit"]:
-                schedule_send(user_id, "⚠️ You’ve reached your daily limit. Subscribe to continue using TurnitQ.")
-                return "", 200
+                # daily limit
+                if u["used_today"] >= u["daily_limit"]:
+                    send_message_sync(user_id, "⚠️ You've reached your daily limit. Subscribe to continue using TurnitQ.")
+                    return "ok", 200
 
-            # accept file: download it
-            file_obj = bot.get_file(doc.file_id)
-            local_path = str(TEMP_DIR / f"{user_id}_{int(time.time())}_{filename}")
-            try:
-                file_obj.download(custom_path=local_path)
-            except Exception as e:
-                schedule_send(user_id, "Failed to download file. Try again.")
-                print("download error", e)
-                return "", 200
+                # accept file: download it
+                file_obj = bot.get_file(doc.file_id)
+                local_path = str(TEMP_DIR / f"{user_id}_{int(time.time())}_{filename}")
+                try:
+                    file_obj.download(custom_path=local_path)
+                except Exception as e:
+                    send_message_sync(user_id, "Failed to download file. Try again.")
+                    print("download error", e)
+                    return "ok", 200
 
-            # create submission record
-            created = now_ts()
-            cur = db.cursor()
-            cur.execute("INSERT INTO submissions(user_id, filename, status, created_at) VALUES(?,?,?,?)",
-                        (user_id, filename, "queued", created))
-            sub_id = cur.lastrowid
-            db.commit()
+                # create submission record
+                created = now_ts()
+                cur = db.cursor()
+                cur.execute("INSERT INTO submissions(user_id, filename, status, created_at) VALUES(?,?,?,?)",
+                            (user_id, filename, "queued", created))
+                sub_id = cur.lastrowid
+                db.commit()
 
-            # update user last_submission and usage
-            cur.execute("UPDATE users SET last_submission=?, used_today=used_today+1 WHERE user_id=?", (created, user_id))
-            db.commit()
+                # update user last_submission and usage
+                cur.execute("UPDATE users SET last_submission=?, used_today=used_today+1 WHERE user_id=?", (created, user_id))
+                db.commit()
 
-            schedule_send(user_id, "✅ File received. Checking with TurnitQ — please wait a few seconds…")
-            # kick off background processing (mock)
-            start_processing(sub_id, local_path, options={})
-            return "", 200
+                send_message_sync(user_id, "✅ File received. Checking with TurnitQ — please wait a few seconds…")
+                # kick off background processing (mock)
+                start_processing(sub_id, local_path, options={})
+                return "ok", 200
 
-    return "", 200
-@ app.route("/")
+        return "ok", 200
+        
+    except Exception as e:
+        print("Error in telegram_webhook:", e)
+        return "error", 500
+
+@app.route("/")
 def greet():
-    return(f"{TELEGRAM_BOT_TOKEN}")
+    return f"Bot is running with token: {TELEGRAM_BOT_TOKEN[:10]}..."
 
 # ---------------------------
 # Paystack webhook (test)
 # ---------------------------
 @app.route("/paystack/webhook", methods=["POST"])
 def paystack_webhook():
-    data = request.get_json(force=True)
-    # In production, verify signature header and call Paystack verify endpoint
-    # Here we simulate verification with reference passed
-    # Example payload (simulate): {"event":"charge.success","data":{"reference":"tempref_...","amount":800000}}
-    if not data:
-        return "", 400
-    ev = data.get("event")
-    payload = data.get("data", {})
-    ref = payload.get("reference")
-    # find reservation
-    cur = db.cursor()
-    row = cur.execute("SELECT * FROM reservations WHERE reference=? OR reference LIKE ?", (ref, f"%{ref}%")).fetchone()
-    if not row:
-        return jsonify({"status":"ok","note":"reservation not found"}), 200
+    try:
+        data = request.get_json(force=True)
+        if not data:
+            return "", 400
+            
+        ev = data.get("event")
+        payload = data.get("data", {})
+        ref = payload.get("reference")
+        
+        # find reservation
+        cur = db.cursor()
+        row = cur.execute("SELECT * FROM reservations WHERE reference=? OR reference LIKE ?", (ref, f"%{ref}%")).fetchone()
+        if not row:
+            return jsonify({"status":"ok","note":"reservation not found"}), 200
 
-    user_id = row["user_id"]
-    plan = row["plan"]
-    # for demo set plan attributes
-    plan_map = {"Premium": (5, 28), "Pro": (30, 28), "Elite": (100, 28)}
-    checks, days = plan_map.get(plan, (5, 28))
-    # activate plan for user
-    set_user_plan(user_id, plan, checks, days=days)
-    # remove reservation
-    cur.execute("DELETE FROM reservations WHERE id=?", (row["id"],))
-    db.commit()
-    # send confirmation
-    schedule_send(user_id, f"✅ You’re now on {plan}!\nActive until { (datetime.datetime.utcnow() + datetime.timedelta(days=days)).date() }\nYou have {checks} checks per day.")
-    return jsonify({"status":"success"}), 200
+        user_id = row["user_id"]
+        plan = row["plan"]
+        # for demo set plan attributes
+        plan_map = {"Premium": (5, 28), "Pro": (30, 28), "Elite": (100, 28)}
+        checks, days = plan_map.get(plan, (5, 28))
+        # activate plan for user
+        set_user_plan(user_id, plan, checks, days=days)
+        # remove reservation
+        cur.execute("DELETE FROM reservations WHERE id=?", (row["id"],))
+        db.commit()
+        # send confirmation
+        send_message_sync(user_id, f"✅ You're now on {plan}!\nActive until { (datetime.datetime.utcnow() + datetime.timedelta(days=days)).date() }\nYou have {checks} checks per day.")
+        return jsonify({"status":"success"}), 200
+        
+    except Exception as e:
+        print("Error in paystack_webhook:", e)
+        return jsonify({"status":"error"}), 500
 
 # ---------------------------
 # Admin / debug endpoints
@@ -395,6 +434,6 @@ def set_webhook():
     print("setWebhook response:", r.text)
 
 if __name__ == "__main__":
-# for local testing, you can call set_webhook() once (if WEBHOOK_BASE_URL is reachable).
+    # for local testing, you can call set_webhook() once (if WEBHOOK_BASE_URL is reachable).
     set_webhook()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
