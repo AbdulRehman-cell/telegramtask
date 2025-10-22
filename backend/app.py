@@ -198,7 +198,13 @@ async def send_text(chat_id, text, reply_markup=None):
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
         print("Message sent successfully")
     except Exception as e:
-        print("send_text error:", e)
+        print("schedule_send error:", e)
+        
+        loop = asyncio.get_event_loop()
+
+def schedule_send(chat_id, text, reply_markup=None):
+    """Schedule an async schedule_send without blocking Flask."""
+    asyncio.run_coroutine_threadsafe(send_text(chat_id, text, reply_markup), loop)
 
 
 
@@ -224,12 +230,12 @@ def telegram_webhook():
         text = update.message.text or ""
         # Commands
         if text.startswith("/start"):
-            asyncio.run(send_text(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin."))
+            asyncio.run(schedule_send(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin."))
             return "hello", 200
         if text.startswith("/id"):
             u = user_get(user_id)
             reply = f"👤 Your Account Info:\nUser ID: {user_id}\nPlan: {u['plan']}\nDaily Total Checks: {u['daily_limit']} - {u['used_today']}\nSubscription ends: {u['expiry_date'] or 'N/A'}"
-            asyncio.run(send_text(user_id, reply))
+            asyncio.run(schedule_send(user_id, reply))
             return "hello", 200
         if text.startswith("/upgrade"):
             # Check capacity before showing Paystack link
@@ -238,7 +244,7 @@ def telegram_webhook():
             galloc = global_alloc()
             gmax = int(meta_get("global_max", "50"))
             if galloc + plan_checks > gmax:
-                asyncio.run(send_text(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later."))
+                asyncio.run(schedule_send(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later."))
                 return "", 200
             # Reserve slot for 10 minutes
             now = now_ts()
@@ -252,7 +258,7 @@ def telegram_webhook():
             # generate a fake Paystack link (replace with real link creation)
             pay_link = f"https://paystack.com/pay/fakepay?ref=tempref_{now}"
             markup = InlineKeyboardMarkup([[InlineKeyboardButton("Pay (Sandbox)", url=pay_link)]])
-            asyncio.run(send_text(user_id, f"Your slot is reserved for 10 minutes. Click the button to pay for {plan}.", reply_markup=markup))
+            asyncio.run(schedule_send(user_id, f"Your slot is reserved for 10 minutes. Click the button to pay for {plan}.", reply_markup=markup))
             return "", 200
         if text.startswith("/cancel"):
             # Cancel user's running submission (simple implementation: mark last submission cancelled)
@@ -262,9 +268,9 @@ def telegram_webhook():
             if row:
                 cur.execute("UPDATE submissions SET status=? WHERE id=?", ("cancelled", row["id"]))
                 db.commit()
-                send_text(user_id, "❌ Your check has been cancelled.")
+                schedule_send(user_id, "❌ Your check has been cancelled.")
             else:
-                send_text(user_id, "You have no running checks.")
+                schedule_send(user_id, "You have no running checks.")
             return "", 200
 
         # Otherwise, handle file uploads
@@ -272,19 +278,19 @@ def telegram_webhook():
             doc = update.message.document
             filename = doc.file_name or f"file_{now_ts()}"
             if not allowed_file(filename):
-                send_text(user_id, "⚠️ Only .pdf and .docx files are allowed.")
+                schedule_send(user_id, "⚠️ Only .pdf and .docx files are allowed.")
                 return "", 200
 
             u = user_get(user_id)
             # cooldown check
             last = u["last_submission"] or 0
             if now_ts() - last < 60:
-                send_text(user_id, "⏳ Please wait 1 minute before submitting another document.")
+                schedule_send(user_id, "⏳ Please wait 1 minute before submitting another document.")
                 return "", 200
 
             # daily limit
             if u["used_today"] >= u["daily_limit"]:
-                send_text(user_id, "⚠️ You’ve reached your daily limit. Subscribe to continue using TurnitQ.")
+                schedule_send(user_id, "⚠️ You’ve reached your daily limit. Subscribe to continue using TurnitQ.")
                 return "", 200
 
             # accept file: download it
@@ -293,7 +299,7 @@ def telegram_webhook():
             try:
                 file_obj.download(custom_path=local_path)
             except Exception as e:
-                send_text(user_id, "Failed to download file. Try again.")
+                schedule_send(user_id, "Failed to download file. Try again.")
                 print("download error", e)
                 return "", 200
 
@@ -309,7 +315,7 @@ def telegram_webhook():
             cur.execute("UPDATE users SET last_submission=?, used_today=used_today+1 WHERE user_id=?", (created, user_id))
             db.commit()
 
-            send_text(user_id, "✅ File received. Checking with TurnitQ — please wait a few seconds…")
+            schedule_send(user_id, "✅ File received. Checking with TurnitQ — please wait a few seconds…")
             # kick off background processing (mock)
             start_processing(sub_id, local_path, options={})
             return "", 200
@@ -350,7 +356,7 @@ def paystack_webhook():
     cur.execute("DELETE FROM reservations WHERE id=?", (row["id"],))
     db.commit()
     # send confirmation
-    send_text(user_id, f"✅ You’re now on {plan}!\nActive until { (datetime.datetime.utcnow() + datetime.timedelta(days=days)).date() }\nYou have {checks} checks per day.")
+    schedule_send(user_id, f"✅ You’re now on {plan}!\nActive until { (datetime.datetime.utcnow() + datetime.timedelta(days=days)).date() }\nYou have {checks} checks per day.")
     return jsonify({"status":"success"}), 200
 
 # ---------------------------
