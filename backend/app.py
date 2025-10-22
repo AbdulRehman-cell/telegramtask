@@ -311,7 +311,7 @@ def telegram_webhook():
     return "", 200
 app.route("/")
 def greet():
-    return(f"{TELEGRAM_BOT_TOKEN}")
+    return(f"hello")
 
 # ---------------------------
 # Paystack webhook (test)
