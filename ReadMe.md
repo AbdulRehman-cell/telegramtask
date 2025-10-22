@@ -17,7 +17,7 @@ This scaffold accepts document uploads from Telegram and queues them for process
 1. Create a new Web Service on Render, link your GitHub repo.
 2. Add environment variables from `.env` to Render settings.
 3. Use the `web` command from the `Procfile`.
-4. Create a Background Worker for `bot` using the `bot` Procfile line.
+4. Create a  Background Worker for `bot` using the `bot` Procfile line.
 
 ## Replacing processing
 Replace `backend/tasks.py` placeholder with your approved Turnitin API or manual process. Do not add automation that violates the Turnitin terms.

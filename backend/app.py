@@ -207,6 +207,8 @@ def require_json(f):
 # ---------------------------
 # Flask routes: Webhook for Telegram
 # ---------------------------
+  
+  
 @app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), bot)
@@ -307,6 +309,9 @@ def telegram_webhook():
             return "", 200
 
     return "", 200
+app.route("/")
+def greet():
+    return(f"{TELEGRAM_BOT_TOKEN}")
 
 # ---------------------------
 # Paystack webhook (test)
