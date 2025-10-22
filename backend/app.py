@@ -7,6 +7,7 @@ import datetime
 import sqlite3
 from pathlib import Path
 from functools import wraps
+import asyncio
 
 from flask import Flask, request, jsonify, abort
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -190,7 +191,7 @@ def start_processing(submission_id, file_path, options):
 # ---------------------------
 # Telegram helper: send messages
 # ---------------------------
-def send_text(chat_id, text, reply_markup=None):
+async def send_text(chat_id, text, reply_markup=None):
     try:
         print(f"Sending message to {chat_id}: {text}")
         bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
@@ -221,12 +222,12 @@ def telegram_webhook():
         text = update.message.text or ""
         # Commands
         if text.startswith("/start"):
-            send_text(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin.")
+            asyncio.run(send_text(user_id, "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin."))
             return "hello", 200
         if text.startswith("/id"):
             u = user_get(user_id)
             reply = f"👤 Your Account Info:\nUser ID: {user_id}\nPlan: {u['plan']}\nDaily Total Checks: {u['daily_limit']} - {u['used_today']}\nSubscription ends: {u['expiry_date'] or 'N/A'}"
-            send_text(user_id, reply)
+            asyncio.run(send_text(user_id, reply))
             return "hello", 200
         if text.startswith("/upgrade"):
             # Check capacity before showing Paystack link
@@ -235,7 +236,7 @@ def telegram_webhook():
             galloc = global_alloc()
             gmax = int(meta_get("global_max", "50"))
             if galloc + plan_checks > gmax:
-                send_text(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later.")
+                asyncio.run(send_text(user_id, "Sorry, that plan is full right now. Please try a smaller plan or check back later."))
                 return "", 200
             # Reserve slot for 10 minutes
             now = now_ts()
@@ -249,7 +250,7 @@ def telegram_webhook():
             # generate a fake Paystack link (replace with real link creation)
             pay_link = f"https://paystack.com/pay/fakepay?ref=tempref_{now}"
             markup = InlineKeyboardMarkup([[InlineKeyboardButton("Pay (Sandbox)", url=pay_link)]])
-            send_text(user_id, f"Your slot is reserved for 10 minutes. Click the button to pay for {plan}.", reply_markup=markup)
+            asyncio.run(send_text(user_id, f"Your slot is reserved for 10 minutes. Click the button to pay for {plan}.", reply_markup=markup))
             return "", 200
         if text.startswith("/cancel"):
             # Cancel user's running submission (simple implementation: mark last submission cancelled)
