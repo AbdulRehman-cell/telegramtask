@@ -222,7 +222,7 @@ def telegram_webhook():
             u = user_get(user_id)
             reply = f"👤 Your Account Info:\nUser ID: {user_id}\nPlan: {u['plan']}\nDaily Total Checks: {u['daily_limit']} - {u['used_today']}\nSubscription ends: {u['expiry_date'] or 'N/A'}"
             send_text(user_id, reply)
-            return "", 200
+            return "hello", 200
         if text.startswith("/upgrade"):
             # Check capacity before showing Paystack link
             plan = "Premium"
