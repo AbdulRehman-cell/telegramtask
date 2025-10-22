@@ -3,6 +3,8 @@ flask==3.0.3
 python-telegram-bot==22.5
 python-dotenv==1.0.1
 requests==2.32.3
+python-3.12.6
+
 
 # --- Scheduling / Background Tasks ---
 apscheduler==3.10.4
