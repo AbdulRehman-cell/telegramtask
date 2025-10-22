@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from functools import wraps
 import asyncio
+loop = asyncio.get_event_loop()
 
 from flask import Flask, request, jsonify, abort
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -200,7 +201,7 @@ async def send_text(chat_id, text, reply_markup=None):
     except Exception as e:
         print("schedule_send error:", e)
         
-        loop = asyncio.get_event_loop()
+        
 
 def schedule_send(chat_id, text, reply_markup=None):
     """Schedule an async schedule_send without blocking Flask."""
