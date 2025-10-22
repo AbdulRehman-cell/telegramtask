@@ -1,49 +1,34 @@
-# bot.py
 import os
 import asyncio
 from datetime import datetime
+from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from db import ensure_user, create_job, increment_used, init_db
 from utils import allowed_file, in_cooldown, set_cooldown_seconds
 
-# in bot.py
-from telegram.ext import ApplicationBuilder, CommandHandler
-
-app = ApplicationBuilder().token("8291206067:AAFffXWUa7u5FBCqoUnOySIDre9KwpNXP3g").build()
-app.add_handler(CommandHandler("start", start))
-# etc.
-
-# Set webhook URL (your Render web service)
-await app.bot.set_webhook("https://telegramtask-1.onrender.com//webhook")
-
+# Load token from environment variable
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TEMP_PATH = "uploads"
-TELEGRAM_TOKEN = os.getenv("8291206067:AAFffXWUa7u5FBCqoUnOySIDre9KwpNXP3g")
 
-# Initialize database
+# Initialize DB
 init_db()
 
+# Initialize Telegram bot
+bot_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+# ---------------- Command Handlers ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user(update.effective_user.id)
     await update.message.reply_text("👋 Welcome to TurnitQ! Use /check to upload your document.")
 
-
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📄 Please upload your document (.docx or .pdf).")
-
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = ensure_user(uid)
 
-    # Check cooldown
     if user.get("cooldown_until"):
         in_cd, rem = in_cooldown(user["cooldown_until"])
         if in_cd:
@@ -66,7 +51,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     job_id = create_job(uid, local_path)
     increment_used(uid)
 
-    # Set cooldown in DB
     import sqlite3
     conn = sqlite3.connect("turnitq.db")
     c = conn.cursor()
@@ -76,30 +60,40 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("✅ File received. It is queued for processing. You will get a report when ready.")
 
-
 async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = ensure_user(uid)
     await update.message.reply_text(
-        f"👤 Your Account Info:\n"
-        f"User ID: {uid}\n"
-        f"Plan: {user['plan']}\n"
-        f"Used today: {user['used_today']}/{user['daily_limit']}"
+        f"👤 Your Account Info:\nUser ID: {uid}\nPlan: {user['plan']}\nUsed today: {user['used_today']}/{user['daily_limit']}"
     )
 
+# ---------------- FastAPI Setup ----------------
+app = FastAPI()
 
-async def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check", check_cmd))
-    app.add_handler(CommandHandler("id", id_cmd))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+@app.post("/webhook")
+async def webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, bot_app.bot)
+    await bot_app.update_queue.put(update)
+    return {"ok": True}
 
-    print("Bot starting...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
+@app.get("/")
+async def root():
+    return {"message": "TurnitQ backend is running!"}
 
+# ---------------- Start bot ----------------
+async def start_bot():
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("check", check_cmd))
+    bot_app.add_handler(CommandHandler("id", id_cmd))
+    bot_app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    await bot_app.initialize()
+    await bot_app.start()
+    # Set webhook
+    await bot_app.bot.set_webhook("https://telegramtask-1.onrender.com/webhook")
+    print("Webhook set and bot started.")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Start bot when FastAPI starts
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(start_bot())
