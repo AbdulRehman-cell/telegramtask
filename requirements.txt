@@ -1,8 +1,27 @@
-python-telegram-bot>=20.0
-fastapi
-uvicorn[standard]
-aiofiles
-apscheduler
-python-multipart
-pydantic
-playwright==1.36.0 # optional; not used by scaffold but handy later
+# FastAPI backend
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+
+# Telegram bot
+python-telegram-bot>=20.5
+
+# Database & storage
+firebase-admin>=6.0.1
+python-dotenv>=1.0.0
+
+# Async tasks / scheduling
+apscheduler>=3.10.1
+
+# Automation (if needed for scraping or browser tasks)
+playwright>=1.35.0
+selenium>=4.11.2
+
+# Utilities
+requests>=2.31.0
+
+# Ensure greenlet works with Python 3.11
+greenlet>=2.0.2
+
+# Optional: for PDF/DOCX processing
+python-docx>=0.8.12
+PyPDF2>=3.0.1
