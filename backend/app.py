@@ -760,7 +760,7 @@ def debug():
 
 @app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST", "GET"])
 def telegram_webhook():
-    if request.method == "GET":
+    if request.method == "POST":
         return "Webhook is active! Send POST requests here."
     
     try:
