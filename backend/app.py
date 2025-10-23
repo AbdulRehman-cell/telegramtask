@@ -17,7 +17,7 @@ import base64
 load_dotenv()
 
 # Telegram Bot
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","8291206067:AAHzmYHr1iHFn1XOo4AfVGwEULRUNZfLvCc")
 
 # Real Turnitin Credentials
 TURNITIN_USERNAME = os.getenv("TURNITIN_USERNAME", "Abiflow")
