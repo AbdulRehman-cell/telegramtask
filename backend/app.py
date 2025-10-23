@@ -760,341 +760,6 @@ def debug():
 
 @app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST", "GET"])
 def telegram_webhook():
-    if request.method == "POST":
-        return "Webhook is active! Send POST requests here."
-    
-    try:
-        update_data = request.get_json(force=True)
-        
-        # Extract basic info from update
-        if 'message' in update_data:
-            message = update_data['message']
-            user_id = message['from']['id']
-            text = message.get('text', '')
-            
-            print(f"👤 User {user_id} sent: {text}")
-            
-            # Check if user is waiting for options
-            session = get_user_session(user_id)
-            if session['waiting_for_options'] and text:
-                options = parse_options_response(text)
-                if options:
-                    # Process the file with options
-                    update_user_session(user_id, waiting_for_options=0)
-                    
-                    # Create submission
-                    created = now_ts()
-                    cur = db.cursor()
-                    
-                    # Check if it's user's first free check
-                    user_data = user_get(user_id)
-                    is_free_check = user_data['free_checks_used'] == 0 and user_data['plan'] == 'free'
-                    
-                    if not is_free_check and user_data['free_checks_used'] > 0 and user_data['plan'] == 'free':
-                        send_telegram_message(
-                            user_id,
-                            "⚠️ You've already used your free check.\nSubscribe to continue using TurnitQ.",
-                            reply_markup=create_inline_keyboard([[("💎 Upgrade Plan", "upgrade_after_free")]])
-                        )
-                        return "ok", 200
-                    
-                    # Check daily limit
-                    if user_data['used_today'] >= user_data['daily_limit']:
-                        send_telegram_message(
-                            user_id,
-                            "⚠️ You've reached your daily limit!\n\n"
-                            "Use /upgrade to get more checks per day."
-                        )
-                        return "ok", 200
-                    
-                    # Check cooldown
-                    last_submission = user_data['last_submission'] or 0
-                    if now_ts() - last_submission < 60:
-                        send_telegram_message(user_id, "⏳ Please wait 1 minute before submitting another document.")
-                        return "ok", 200
-                    
-                    # Check global capacity
-                    if global_alloc() >= global_max():
-                        send_telegram_message(
-                            user_id,
-                            "⚠️ We've reached today's maximum checks. Please try again after midnight."
-                        )
-                        return "ok", 200
-                    
-                    cur.execute(
-                        "INSERT INTO submissions(user_id, filename, status, created_at, options, is_free_check) VALUES(?,?,?,?,?,?)",
-                        (user_id, session['current_filename'], "queued", created, json.dumps(options), is_free_check)
-                    )
-                    sub_id = cur.lastrowid
-                    
-                    # Update user usage
-                    cur.execute(
-                        "UPDATE users SET last_submission=?, used_today=used_today+1, free_checks_used=free_checks_used+? WHERE user_id=?",
-                        (created, 1 if is_free_check else 0, user_id)
-                    )
-                    db.commit()
-
-                    # Download the file using stored file_id
-                    local_path = str(TEMP_DIR / f"{user_id}_{now_ts()}_{session['current_filename']}")
-                    if download_telegram_file(session['current_file_id'], local_path):
-                        send_telegram_message(user_id, "✅ File received. Submitting to REAL Turnitin — please wait...")
-                        # Start REAL processing with options
-                        start_processing(sub_id, local_path, options)
-                    else:
-                        send_telegram_message(user_id, "❌ Failed to process file. Please try again.")
-                    
-                    return "ok", 200
-                else:
-                    send_telegram_message(
-                        user_id,
-                        "❌ Invalid format. Please reply with 4 choices separated by commas.\n\n"
-                        "Example: Yes, No, Yes, Yes\n\n"
-                        "1. Exclude bibliography\n"
-                        "2. Exclude quoted text\n" 
-                        "3. Exclude cited text\n"
-                        "4. Exclude small matches"
-                    )
-                    return "ok", 200
-            
-            # Handle commands
-            if text.startswith("/start"):
-                send_telegram_message(
-                    user_id, 
-                    "👋 Welcome to TurnitQ!\n\n"
-                    "I can check your documents for originality and AI writing using REAL Turnitin.\n\n"
-                    "Available commands:\n"
-                    "/check - Start a new document check\n"
-                    "/id - Your account info\n"
-                    "/upgrade - Upgrade your plan\n"
-                    "/cancel - Cancel current check"
-                )
-                return "ok", 200
-                
-            elif text.startswith("/check"):
-                send_telegram_message(
-                    user_id,
-                    "📄 Please upload your document (.docx or .pdf).\n"
-                    "Only one file can be processed at a time."
-                )
-                return "ok", 200
-                
-            elif text.startswith("/id"):
-                u = user_get(user_id)
-                reply = (
-                    f"👤 Your Account Info:\n"
-                    f"User ID: {user_id}\n"
-                    f"Plan: {u['plan']}\n"
-                    f"Daily Total Checks: {u['daily_limit']} - {u['used_today']}\n"
-                    f"Subscription ends: {u['expiry_date'] or 'N/A'}"
-                )
-                send_telegram_message(user_id, reply)
-                return "ok", 200
-                
-            elif text.startswith("/upgrade"):
-                # Show upgrade plans
-                keyboard = create_inline_keyboard([
-                    [("⚡ Premium — $8/month", "plan_premium")],
-                    [("🚀 Pro — $29/month", "plan_pro")],
-                    [("👑 Elite — $79/month", "plan_elite")]
-                ])
-                
-                upgrade_message = (
-                    "🔓 Unlock More with TurnitQ Premium Plans\n\n"
-                    "Your first check was free — now take your writing game to the next level.\n"
-                    "Choose the plan that fits your workload 👇\n\n"
-                    "⚡ Premium — $8/month\n"
-                    "✔ Up to 5 checks per day\n"
-                    "✔ Full similarity report\n"
-                    "✔ Faster results\n\n"
-                    "🚀 Pro — $29/month\n"
-                    "✔ Up to 30 checks per day\n"
-                    "✔ Full similarity report\n"
-                    "✔ Faster results\n"
-                    "✔ AI-generated report\n"
-                    "✔ View full matching sources\n\n"
-                    "👑 Elite — $79/month\n"
-                    "✔ Up to 100 checks per day\n"
-                    "✔ Priority processing\n"
-                    "✔ Full similarity report\n"
-                    "✔ AI-generated report"
-                )
-                
-                send_telegram_message(user_id, upgrade_message, reply_markup=keyboard)
-                return "ok", 200
-                
-            elif text.startswith("/cancel"):
-                # Cancel current processing submission
-                cur = db.cursor()
-                cur.execute(
-                    "UPDATE submissions SET status='cancelled' WHERE user_id=? AND status IN ('queued', 'processing')",
-                    (user_id,)
-                )
-                db.commit()
-                send_telegram_message(user_id, "❌ Your check has been cancelled.")
-                return "ok", 200
-
-            # Handle file uploads
-            elif 'document' in message:
-                doc = message['document']
-                filename = doc.get('file_name', f"file_{now_ts()}")
-                file_id = doc['file_id']
-                
-                if not allowed_file(filename):
-                    send_telegram_message(user_id, "⚠️ Only .pdf and .docx files are allowed.")
-                    return "ok", 200
-
-                u = user_get(user_id)
-                
-                # Check if user has already used free check
-                if u['free_checks_used'] > 0 and u['plan'] == 'free':
-                    send_telegram_message(
-                        user_id,
-                        "⚠️ You've already used your free check.\nSubscribe to continue using TurnitQ.",
-                        reply_markup=create_inline_keyboard([[("💎 Upgrade Plan", "upgrade_after_free")]])
-                    )
-                    return "ok", 200
-                
-                # Daily limit check
-                if u["used_today"] >= u["daily_limit"]:
-                    send_telegram_message(
-                        user_id,
-                        "⚠️ You've reached your daily limit!\n\n"
-                        "Use /upgrade to get more checks per day."
-                    )
-                    return "ok", 200
-
-                # Check cooldown
-                last_submission = u['last_submission'] or 0
-                if now_ts() - last_submission < 60:
-                    send_telegram_message(user_id, "⏳ Please wait 1 minute before submitting another document.")
-                    return "ok", 200
-
-                # Store file info and ask for options
-                update_user_session(
-                    user_id, 
-                    waiting_for_options=1,
-                    current_filename=filename,
-                    current_file_id=file_id
-                )
-                
-                ask_for_report_options(user_id)
-                return "ok", 200
-
-            else:
-                # Handle any other text
-                send_telegram_message(
-                    user_id,
-                    "⚠️ Please use one of the available commands:\n/check • /cancel • /upgrade • /id"
-                )
-                return "ok", 200
-
-        # Handle callback queries (button clicks)
-        elif 'callback_query' in update_data:
-            callback = update_data['callback_query']
-            user_id = callback['from']['id']
-            data = callback['data']
-            
-            if data.startswith("plan_"):
-                plan = data.replace("plan_", "")
-                plan_data = PLANS[plan]
-                
-                # Check capacity before payment
-                current_alloc = global_alloc()
-                if current_alloc + plan_data['daily_limit'] > global_max():
-                    send_telegram_message(
-                        user_id,
-                        "❌ Sorry, that plan is full right now. Please try a smaller plan or check back later."
-                    )
-                    return "ok", 200
-                
-                # Create payment reference
-                reference = f"pay_{user_id}_{now_ts()}"
-                create_payment_record(user_id, plan, reference)
-                
-                payment_message = (
-                    f"💳 Processing Payment — {plan_data['name']} (${plan_data['price']})\n\n"
-                    f"Tap Pay below to complete the transaction."
-                )
-                
-                payment_keyboard = create_inline_keyboard([
-                    [("💳 Pay", f"payment_{plan}")],
-                    [("✅ I've Paid", f"verify_{reference}")]
-                ])
-                
-                send_telegram_message(user_id, payment_message, reply_markup=payment_keyboard)
-                
-            elif data.startswith("verify_"):
-                reference = data.replace("verify_", "")
-                
-                # Verify payment
-                send_telegram_message(user_id, "🔍 Verifying your payment...")
-                verification_result = verify_payment(reference)
-                
-                if verification_result.get('status') == 'success':
-                    # Extract plan from payment record
-                    cur = db.cursor()
-                    payment = cur.execute(
-                        "SELECT plan FROM payments WHERE reference=?", (reference,)
-                    ).fetchone()
-                    
-                    if payment:
-                        plan = payment['plan']
-                        expiry_date = activate_user_plan(user_id, plan)
-                        
-                        success_message = (
-                            f"✅ You're now on {PLANS[plan]['name']}!\n"
-                            f"Active until {expiry_date}\n"
-                            f"You have {PLANS[plan]['daily_limit']} checks per day.\n"
-                            f"Use /id to view your current usage."
-                        )
-                        send_telegram_message(user_id, success_message)
-                    else:
-                        send_telegram_message(user_id, "❌ Payment record not found.")
-                else:
-                    send_telegram_message(
-                        user_id,
-                        "❌ Payment not confirmed yet. Please wait a moment or contact support."
-                    )
-                    
-            elif data == "upgrade_after_free":
-                keyboard = create_inline_keyboard([
-                    [("⚡ Premium — $8/month", "plan_premium")],
-                    [("🚀 Pro — $29/month", "plan_pro")],
-                    [("👑 Elite — $79/month", "plan_elite")]
-                ])
-                send_telegram_message(
-                    user_id,
-                    "🔓 Unlock More with TurnitQ Premium Plans\n\n"
-                    "Choose your upgrade plan:",
-                    reply_markup=keyboard
-                )
-                
-            elif data == "renew_plan":
-                keyboard = create_inline_keyboard([
-                    [("⚡ Premium — $8/month", "plan_premium")],
-                    [("🚀 Pro — $29/month", "plan_pro")],
-                    [("👑 Elite — $79/month", "plan_elite")]
-                ])
-                send_telegram_message(
-                    user_id,
-                    "🔄 Renew Your TurnitQ Subscription\n\n"
-                    "Choose your renewal plan:",
-                    reply_markup=keyboard
-                )
-                
-        return "ok", 200
-        
-    except Exception as e:
-        print(f"❌ Webhook error: {e}")
-        import traceback
-        traceback.print_exc()
-        return "error", 500
-
-# ---------------------------
-# Setup webhook
-# ---------------------------
-@app.route(f"/webhook/{TELEGRAM_BOT_TOKEN}", methods=["POST", "GET"])
-def telegram_webhook():
     if request.method == "GET":
         return "Webhook is active! Send POST requests here."
     
@@ -1425,6 +1090,31 @@ def telegram_webhook():
         import traceback
         traceback.print_exc()
         return "error", 500
+# ---------------------------
+# Setup webhook
+# ---------------------------
+def setup_webhook():
+    """Set up Telegram webhook"""
+    try:
+        webhook_url = f"{WEBHOOK_BASE_URL}/webhook/{TELEGRAM_BOT_TOKEN}"
+        print(f"🔗 Setting webhook to: {webhook_url}")
+        
+        response = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
+            params={"url": webhook_url, "drop_pending_updates": True}
+        )
+        
+        result = response.json()
+        print(f"📡 Webhook setup result: {result}")
+        
+        if result.get("ok"):
+            print("✅ Webhook set successfully!")
+        else:
+            print(f"❌ Failed to set webhook: {result}")
+            
+    except Exception as e:
+        print(f"❌ Webhook setup error: {e}")
+
 # ---------------------------
 # Scheduler
 # ---------------------------
