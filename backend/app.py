@@ -24,24 +24,24 @@ def home():
 def telegram_webhook():
     if request.method == "GET":
         return "✅ Webhook active! Send POST requests.", 200
-    
-    try:
-        data = request.get_json(force=True)
+    else :
+        try:
+            data = request.get_json(force=True)
         
-        if 'message' in data:
-            chat_id = data['message']['chat']['id']
-            text = data['message'].get('text', '')
+            if 'message' in data:
+                chat_id = data['message']['chat']['id']
+                text = data['message'].get('text', '')
             
-            if text == '/start':
-                send_telegram_message(chat_id, "✅ Bot is working! Use /check")
-            elif text == '/check':
-                send_telegram_message(chat_id, "📄 Upload a PDF or DOCX file")
-            else:
-                send_telegram_message(chat_id, "Try /start or /check")
+                if text == '/start':
+                    send_telegram_message(chat_id, "✅ Bot is working! Use /check")
+                elif text == '/check':
+                    send_telegram_message(chat_id, "📄 Upload a PDF or DOCX file")
+                else:
+                    send_telegram_message(chat_id, "Try /start or /check")
         
-        return "ok", 200
-    except:
-        return "ok", 200
+            return "ok", 200
+        except:
+            return "ok", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
