@@ -28,10 +28,10 @@ TURNITIN_PASSWORD = os.getenv("TURNITIN_PASSWORD", "TutXFrq6yPUnz23")
 # Paystack Configuration
 PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY", "pk_test_74c1d6196a47c5d80a5c755738d17611c59474d7")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "sk_test_6aac6657d360761ac6a785c09e833627df45c7d5")
-PAYSTACK_CURRENCY = os.getenv("PAYSTACK_CURRENCY", "NGN")
+PAYSTACK_CURRENCY = os.getenv("PAYSTACK_CURRENCY", "USD)
 
 # Other settings
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "").rstrip("/")
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://telegramtask-7.onrender.com/").rstrip("/")
 DATABASE = os.getenv("DATABASE_URL", "bot_db.sqlite")
 SECRET_KEY = os.getenv("SECRET_KEY", "secret")
 
@@ -1070,7 +1070,6 @@ def telegram_webhook(bot_token):
 def paystack_webhook():
     """Paystack webhook for payment verification"""
     try:
-        reference = create_paystack_payment(user_id, plan)
         # Get the signature from the header
         signature = request.headers.get('x-paystack-signature', '')
         if not signature:
@@ -1104,7 +1103,7 @@ def paystack_webhook():
             print(f"💰 Payment success for reference: {reference}")
             
             if status == 'success':
-                # Find the payment record
+                # Find the payment record using paystack_reference
                 cur = db.cursor()
                 payment = cur.execute(
                     "SELECT * FROM payments WHERE paystack_reference=? AND status='pending'",
@@ -1115,29 +1114,38 @@ def paystack_webhook():
                     user_id = payment['user_id']
                     plan = payment['plan']
                     
-                    # Activate subscription
-                    expiry_date = activate_user_subscription(user_id, plan)
-                    if expiry_date:
-                        # Update payment status
-                        cur.execute(
-                            "UPDATE payments SET status='success', verified_at=? WHERE paystack_reference=?",
-                            (now_ts(), reference)
-                        )
-                        db.commit()
-                        
-                        # Send success message
-                        plan_data = PLANS[plan]
-                        success_message = (
-                            f"🎉 Payment Successful!\n\n"
-                            f"✅ Your {plan_data['name']} plan is now active!\n"
-                            f"📅 Expires: {expiry_date}\n"
-                            f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
-                            f"Thank you for upgrading!"
-                        )
-                        send_telegram_message(user_id, success_message)
-                        print(f"✅ Subscription activated for user {user_id}")
+                    # Verify payment with Paystack API
+                    verification = verify_paystack_payment(reference)
+                    if verification.get('status') == 'success':
+                        # Activate subscription
+                        expiry_date = activate_user_subscription(user_id, plan)
+                        if expiry_date:
+                            # Update payment status
+                            cur.execute(
+                                "UPDATE payments SET status='success', verified_at=? WHERE paystack_reference=?",
+                                (now_ts(), reference)
+                            )
+                            db.commit()
+                            
+                            # Send success message
+                            plan_data = PLANS[plan]
+                            success_message = (
+                                f"🎉 Payment Successful!\n\n"
+                                f"✅ Your {plan_data['name']} plan is now active!\n"
+                                f"📅 Expires: {expiry_date}\n"
+                                f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
+                                f"Thank you for upgrading!"
+                            )
+                            send_telegram_message(user_id, success_message)
+                            print(f"✅ Subscription activated for user {user_id}")
+                        else:
+                            print(f"❌ Failed to activate subscription for user {user_id}")
+                    else:
+                        print(f"❌ Payment verification failed: {verification}")
                     
                     return jsonify({"status": "success"}), 200
+                else:
+                    print(f"❌ No pending payment found for reference: {reference}")
         
         # Always return 200 to acknowledge receipt
         return jsonify({"status": "received"}), 200
@@ -1147,8 +1155,6 @@ def paystack_webhook():
         import traceback
         traceback.print_exc()
         return jsonify({"status": "error"}), 500
-    
-
 # Scheduler
 scheduler = BackgroundScheduler()
 
