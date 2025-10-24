@@ -893,59 +893,109 @@ def payment_success():
     <p>You can now return to Telegram and use your new features!</p>
     <p><a href="https://t.me/your_bot_username">Return to Telegram</a></p>
     """
-
+    
+    
+@app.route("/test-paystack-webhook", methods=["GET", "POST"])
+def test_paystack_webhook():
+    """Test endpoint for Paystack webhook"""
+    if request.method == "GET":
+        return """
+        <h1>Paystack Webhook Test</h1>
+        <p>Webhook URL: /paystack-webhook</p>
+        <p>Status: 🟢 Active</p>
+        <p>Method: POST</p>
+        """
+    
+    # Echo back received data for testing
+    print("📨 Test webhook received:")
+    print(f"Headers: {dict(request.headers)}")
+    print(f"Data: {request.get_data()}")
+    
+    return jsonify({
+        "status": "test_received",
+        "headers": dict(request.headers),
+        "data": request.get_json(silent=True) or str(request.get_data())
+    }), 200
+    
 @app.route("/paystack-webhook", methods=["POST"])
 def paystack_webhook():
     """Paystack webhook for payment verification"""
     try:
-        # Verify webhook signature (optional but recommended)
-        signature = request.headers.get('x-paystack-signature')
+        # Get the signature from the header
+        signature = request.headers.get('x-paystack-signature', '')
         if not signature:
             print("❌ No signature in webhook")
             return jsonify({"status": "error"}), 400
         
-        # Verify the webhook data (you can implement signature verification here)
+        # Verify the signature
+        payload = request.get_data(as_text=True)
+        computed_signature = hmac.new(
+            PAYSTACK_SECRET_KEY.encode('utf-8'),
+            payload.encode('utf-8'),
+            digestmod=hashlib.sha512
+        ).hexdigest()
         
+        # Verify the signature matches
+        if not hmac.compare_digest(computed_signature, signature):
+            print("❌ Invalid webhook signature")
+            return jsonify({"status": "error"}), 400
+        
+        # Process the webhook
         data = request.get_json()
         event = data.get('event')
+        
+        print(f"📨 Received Paystack webhook: {event}")
         
         if event == 'charge.success':
             payment_data = data.get('data', {})
             reference = payment_data.get('reference')
             status = payment_data.get('status')
             
+            print(f"💰 Payment success for reference: {reference}")
+            
             if status == 'success':
-                # Verify payment with Paystack API
-                verification = verify_paystack_payment(reference)
-                if verification.get('status') == 'success':
-                    metadata = verification.get('metadata', {})
-                    user_id = metadata.get('user_id')
-                    plan = metadata.get('plan')
+                # Find the payment record
+                cur = db.cursor()
+                payment = cur.execute(
+                    "SELECT * FROM payments WHERE paystack_reference=? AND status='pending'",
+                    (reference,)
+                ).fetchone()
+                
+                if payment:
+                    user_id = payment['user_id']
+                    plan = payment['plan']
                     
-                    if user_id and plan:
-                        # Activate user subscription
-                        expiry_date = activate_user_subscription(int(user_id), plan)
-                        if expiry_date:
-                            # Send success message to user
-                            plan_data = PLANS[plan]
-                            success_message = (
-                                f"🎉 Payment Successful!\n\n"
-                                f"✅ Your {plan_data['name']} plan is now active!\n"
-                                f"📅 Expires: {expiry_date}\n"
-                                f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
-                                f"Thank you for upgrading! You can now use all premium features."
-                            )
-                            send_telegram_message(int(user_id), success_message)
-                            print(f"✅ Subscription activated for user {user_id}")
-                        else:
-                            print(f"❌ Failed to activate subscription for user {user_id}")
+                    # Activate subscription
+                    expiry_date = activate_user_subscription(user_id, plan)
+                    if expiry_date:
+                        # Update payment status
+                        cur.execute(
+                            "UPDATE payments SET status='success', verified_at=? WHERE paystack_reference=?",
+                            (now_ts(), reference)
+                        )
+                        db.commit()
+                        
+                        # Send success message
+                        plan_data = PLANS[plan]
+                        success_message = (
+                            f"🎉 Payment Successful!\n\n"
+                            f"✅ Your {plan_data['name']} plan is now active!\n"
+                            f"📅 Expires: {expiry_date}\n"
+                            f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
+                            f"Thank you for upgrading!"
+                        )
+                        send_telegram_message(user_id, success_message)
+                        print(f"✅ Subscription activated for user {user_id}")
                     
                     return jsonify({"status": "success"}), 200
         
-        return jsonify({"status": "ignored"}), 200
+        # Always return 200 to acknowledge receipt
+        return jsonify({"status": "received"}), 200
         
     except Exception as e:
         print(f"❌ Paystack webhook error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"status": "error"}), 500
 
 @app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
