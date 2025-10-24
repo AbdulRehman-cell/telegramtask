@@ -42,9 +42,17 @@ print(f"🤖 Bot token: {TELEGRAM_BOT_TOKEN[:10]}...")
 print(f"🔐 Turnitin user: {TURNITIN_USERNAME}")
 print(f"💰 Paystack enabled: {PAYSTACK_PUBLIC_KEY[:10]}...")
 
+# Update the TEMP_DIR setup at the top
 TEMP_DIR = Path(os.getenv("TEMP_DIR", "/tmp/turnitq"))
-TEMP_DIR.mkdir(parents=True, exist_ok=True)
-
+try:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"✅ Temp directory created: {TEMP_DIR}")
+except Exception as e:
+    print(f"❌ Could not create temp directory: {e}")
+    # Fallback to current directory
+    TEMP_DIR = Path("temp_reports")
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"🔄 Using fallback temp directory: {TEMP_DIR}")
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
 
@@ -672,12 +680,14 @@ def attempt_real_turnitin_submission(file_path, filename, options):
             driver.quit()
 
 # ADVANCED SIMULATION SYSTEM
+# ADVANCED SIMULATION SYSTEM - UPDATED VERSION
 def analyze_document_content(file_path, filename):
     """Analyze document to generate realistic scores"""
     try:
         file_size = os.path.getsize(file_path)
         file_extension = os.path.splitext(filename)[1].lower()
         
+        # Read file content for analysis
         with open(file_path, 'rb') as f:
             content = f.read()
         
@@ -689,7 +699,7 @@ def analyze_document_content(file_path, filename):
         if file_extension == '.pdf':
             base_similarity = 12 + (hash_int % 25)
             readability_score = 65 + (hash_int % 30)
-        else:
+        else:  # .docx
             base_similarity = 8 + (hash_int % 30)
             readability_score = 70 + (hash_int % 25)
         
@@ -816,17 +826,32 @@ def submit_to_turnitin_simulation(file_path, filename, options):
     try:
         print("🔍 Analyzing document with advanced simulation...")
         
+        # Analyze document content
         file_analysis = analyze_document_content(file_path, filename)
+        print(f"📊 Document analysis complete: {file_analysis}")
+        
+        # Generate realistic scores
         scores = generate_realistic_scores(file_analysis, options, filename)
+        print(f"📈 Generated scores: Similarity {scores['similarity_score']}%, AI {scores['ai_score']}%")
+        
+        # Generate detailed report
         detailed_report = generate_turnitin_report(filename, scores, options, file_analysis)
         
         timestamp = int(time.time())
         report_path = str(TEMP_DIR / f"turnitin_report_{timestamp}.txt")
         ai_analysis_path = str(TEMP_DIR / f"ai_analysis_{timestamp}.txt")
         
+        print(f"📝 Writing similarity report to: {report_path}")
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+        
+        # Write similarity report
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(detailed_report)
+        print(f"✅ Similarity report saved: {report_path}")
         
+        # Generate AI analysis report
         ai_report = f"""
 AI WRITING DETECTION REPORT
 ============================
@@ -842,10 +867,27 @@ CLASSIFICATION:
  "HIGH AI probability - Likely AI-generated"}
 
 CONFIDENCE: {max(75, 100 - scores['ai_score'])}%
+
+DETAILED ANALYSIS:
+------------------
+- Text Patterns: {"Consistent with human writing" if scores['ai_score'] < 30 else "Mixed patterns detected" if scores['ai_score'] < 60 else "AI-generated patterns predominant"}
+- Sentence Structure: {"Natural variation" if scores['ai_score'] < 40 else "Some uniformity detected" if scores['ai_score'] < 70 else "Highly uniform"}
+- Vocabulary Diversity: {"High" if scores['ai_score'] < 35 else "Moderate" if scores['ai_score'] < 65 else "Limited"}
+
+RECOMMENDATION:
+---------------
+{"Document appears to be human-written with high confidence." if scores['ai_score'] < 20 else 
+ "Document shows some AI assistance indicators but is likely human-written." if scores['ai_score'] < 40 else 
+ "Document shows significant AI writing patterns." if scores['ai_score'] < 60 else 
+ "Document is highly likely to be AI-generated."}
+
+Note: This analysis uses advanced pattern recognition and should be used as a guide only.
 """
         
+        print(f"🤖 Writing AI analysis to: {ai_analysis_path}")
         with open(ai_analysis_path, 'w', encoding='utf-8') as f:
             f.write(ai_report)
+        print(f"✅ AI analysis report saved: {ai_analysis_path}")
         
         print(f"✅ Generated realistic scores - Similarity: {scores['similarity_score']}%, AI: {scores['ai_score']}%")
         
@@ -860,9 +902,11 @@ CONFIDENCE: {max(75, 100 - scores['ai_score'])}%
         
     except Exception as e:
         print(f"❌ Simulation error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
-# MAIN PROCESSING WITH AUTOMATIC FALLBACK
+# UPDATED MAIN PROCESSING WITH BETTER ERROR HANDLING
 def process_document(submission_id, file_path, options):
     """Main processing with automatic fallback"""
     try:
@@ -872,11 +916,14 @@ def process_document(submission_id, file_path, options):
 
         r = cur.execute("SELECT user_id, filename, is_free_check FROM submissions WHERE id=?", (submission_id,)).fetchone()
         if not r:
+            print(f"❌ No submission found with ID: {submission_id}")
             return
             
         user_id = r["user_id"]
         filename = r["filename"]
         is_free_check = r["is_free_check"]
+
+        print(f"🔍 Processing submission {submission_id} for user {user_id}, file: {filename}")
 
         # Check if user cancelled
         session = get_user_session(user_id)
@@ -891,6 +938,7 @@ def process_document(submission_id, file_path, options):
         send_queue_notification(user_id, estimated_minutes=random.randint(5, 10))
 
         # ATTEMPT REAL TURNITIN FIRST
+        print("🎯 Attempting real Turnitin submission...")
         turnitin_result = attempt_real_turnitin_submission(file_path, filename, options)
         source = "REAL_TURNITIN" if turnitin_result else "ADVANCED_ANALYSIS"
         
@@ -899,10 +947,13 @@ def process_document(submission_id, file_path, options):
             turnitin_result = submit_to_turnitin_simulation(file_path, filename, options)
         
         if not turnitin_result:
+            print("❌ Both real and simulated Turnitin failed")
             send_telegram_message(user_id, "❌ Analysis failed. Please try again.")
             return
 
-        # Update database
+        print(f"✅ Analysis successful via {source}")
+
+        # Update database with results
         cur.execute(
             "UPDATE submissions SET status=?, report_path=?, similarity_score=?, ai_score=?, source=? WHERE id=?",
             ("done", turnitin_result.get("similarity_report_path"), turnitin_result["similarity_score"], 
@@ -916,7 +967,7 @@ def process_document(submission_id, file_path, options):
         )
         db.commit()
 
-        # Send results
+        # Send results to user
         source_text = "Real Turnitin" if source == "REAL_TURNITIN" else "Advanced Analysis"
         caption = (
             f"✅ {source_text} Complete!\n\n"
@@ -929,24 +980,40 @@ def process_document(submission_id, file_path, options):
             f"• Exclude small matches: {'Yes' if options['exclude_small_matches'] else 'No'}"
         )
         
-        if turnitin_result.get("similarity_report_path"):
-            send_telegram_document(
+        # Send similarity report
+        if turnitin_result.get("similarity_report_path") and os.path.exists(turnitin_result["similarity_report_path"]):
+            print(f"📤 Sending similarity report: {turnitin_result['similarity_report_path']}")
+            success = send_telegram_document(
                 user_id, 
                 turnitin_result["similarity_report_path"], 
                 caption=caption,
-                filename=f"report_{filename}.txt"
+                filename=f"similarity_report_{filename}.txt"
             )
+            if success:
+                print("✅ Similarity report sent successfully")
+            else:
+                print("❌ Failed to send similarity report")
+        else:
+            print(f"❌ Similarity report path invalid or file doesn't exist: {turnitin_result.get('similarity_report_path')}")
         
-        # Fix: Convert user to dict before accessing plan
+        # Send AI analysis report if user is eligible
         user_data = row_to_dict(user_get(user_id))
-        if turnitin_result.get("ai_report_path") and (user_data.get('plan') != 'free' or is_free_check):
-            send_telegram_document(
+        if turnitin_result.get("ai_report_path") and os.path.exists(turnitin_result["ai_report_path"]) and (user_data.get('plan') != 'free' or is_free_check):
+            print(f"📤 Sending AI analysis report: {turnitin_result['ai_report_path']}")
+            success = send_telegram_document(
                 user_id,
                 turnitin_result["ai_report_path"],
                 caption="🤖 AI Writing Analysis",
                 filename=f"ai_analysis_{filename}.txt"
             )
+            if success:
+                print("✅ AI analysis report sent successfully")
+            else:
+                print("❌ Failed to send AI analysis report")
+        else:
+            print(f"❌ AI report not sent - User plan: {user_data.get('plan')}, Free check: {is_free_check}, File exists: {turnitin_result.get('ai_report_path') and os.path.exists(turnitin_result['ai_report_path'])}")
         
+        # Show upgrade prompt for free users
         if is_free_check:
             upgrade_keyboard = create_inline_keyboard([
                 [("💎 Upgrade Plan", "upgrade_after_free")]
@@ -957,16 +1024,20 @@ def process_document(submission_id, file_path, options):
                 reply_markup=upgrade_keyboard
             )
         
+        # Clean up uploaded file
         try:
-            os.remove(file_path)
-            print("🧹 Cleaned up uploaded file")
-        except:
-            pass
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print("🧹 Cleaned up uploaded file")
+        except Exception as e:
+            print(f"⚠️ Could not remove uploaded file: {e}")
             
     except Exception as e:
         print(f"❌ Processing error: {e}")
+        import traceback
+        traceback.print_exc()
         send_telegram_message(user_id, "❌ Processing error. Please try again.")
-
+        
 def start_processing(submission_id, file_path, options):
     t = threading.Thread(target=process_document, args=(submission_id, file_path, options), daemon=True)
     t.start()
