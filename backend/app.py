@@ -19,16 +19,16 @@ import requests
 load_dotenv()
 
 # Telegram Bot
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","8291206067:AAGOsMNvSpnq0S3pDJc0BDda9TtH2rRymqA")
 
 # Turnitin Credentials
 TURNITIN_USERNAME = os.getenv("TURNITIN_USERNAME", "Abiflow")
-TURNITIN_PASSWORD = os.getenv("TURNITIN_PASSWORD", "aBhQNh4QAVJqHhs")
+TURNITIN_PASSWORD = os.getenv("TURNITIN_PASSWORD", "TutXFrq6yPUnz23")
 
 # Paystack Configuration
 PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY", "pk_test_74c1d6196a47c5d80a5c755738d17611c59474d7")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "sk_test_6aac6657d360761ac6a785c09e833627df45c7d5")
-PAYSTACK_CURRENCY = os.getenv("PAYSTACK_CURRENCY", "USD")
+PAYSTACK_CURRENCY = os.getenv("PAYSTACK_CURRENCY", "NGN")
 
 # Other settings
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "").rstrip("/")
