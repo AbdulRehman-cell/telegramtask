@@ -57,74 +57,101 @@ def get_db():
 db = get_db()
 
 def init_db():
-    cur = db.cursor()
-    cur.executescript("""
-    CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        plan TEXT DEFAULT 'free',
-        daily_limit INTEGER DEFAULT 1,
-        used_today INTEGER DEFAULT 0,
-        expiry_date TEXT,
-        last_submission INTEGER DEFAULT 0,
-        free_checks_used INTEGER DEFAULT 0,
-        subscription_active BOOLEAN DEFAULT 0,
-        created_at INTEGER DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS submissions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        filename TEXT,
-        status TEXT,
-        created_at INTEGER,
-        report_path TEXT,
-        options TEXT,
-        is_free_check BOOLEAN DEFAULT 0,
-        similarity_score INTEGER,
-        ai_score INTEGER,
-        source TEXT DEFAULT 'simulation'
-    );
-    CREATE TABLE IF NOT EXISTS user_sessions (
-        user_id INTEGER PRIMARY KEY,
-        waiting_for_options BOOLEAN DEFAULT 0,
-        current_file_path TEXT,
-        current_filename TEXT,
-        current_file_id TEXT,
-        cancel_requested BOOLEAN DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        plan TEXT,
-        amount REAL,
-        reference TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at INTEGER,
-        verified_at INTEGER,
-        paystack_reference TEXT,
-        payment_url TEXT
-    );
-    CREATE TABLE IF NOT EXISTS meta (
-        k TEXT PRIMARY KEY,
-        v TEXT
-    );
-    CREATE TABLE IF NOT EXISTS turnitin_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        submission_id INTEGER,
-        success BOOLEAN,
-        source TEXT,
-        error_message TEXT,
-        created_at INTEGER
-    );
-    """)
-    db.commit()
+    try:
+        cur = db.cursor()
+        
+        # Check if users table has created_at column
+        cur.execute("PRAGMA table_info(users)")
+        columns = [column[1] for column in cur.fetchall()]
+        
+        if 'created_at' not in columns:
+            print("🔄 Migrating database schema: adding created_at to users table...")
+            # Add missing columns to users table
+            cur.execute("ALTER TABLE users ADD COLUMN created_at INTEGER DEFAULT 0")
+        
+        # Check if user_sessions table has cancel_requested column
+        cur.execute("PRAGMA table_info(user_sessions)")
+        columns = [column[1] for column in cur.fetchall()]
+        
+        if 'cancel_requested' not in columns:
+            print("🔄 Migrating database schema: adding cancel_requested to user_sessions table...")
+            cur.execute("ALTER TABLE user_sessions ADD COLUMN cancel_requested BOOLEAN DEFAULT 0")
+        
+        # Create other tables if they don't exist
+        cur.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            plan TEXT DEFAULT 'free',
+            daily_limit INTEGER DEFAULT 1,
+            used_today INTEGER DEFAULT 0,
+            expiry_date TEXT,
+            last_submission INTEGER DEFAULT 0,
+            free_checks_used INTEGER DEFAULT 0,
+            subscription_active BOOLEAN DEFAULT 0,
+            created_at INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            filename TEXT,
+            status TEXT,
+            created_at INTEGER,
+            report_path TEXT,
+            options TEXT,
+            is_free_check BOOLEAN DEFAULT 0,
+            similarity_score INTEGER,
+            ai_score INTEGER,
+            source TEXT DEFAULT 'simulation'
+        );
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            user_id INTEGER PRIMARY KEY,
+            waiting_for_options BOOLEAN DEFAULT 0,
+            current_file_path TEXT,
+            current_filename TEXT,
+            current_file_id TEXT,
+            cancel_requested BOOLEAN DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            plan TEXT,
+            amount REAL,
+            reference TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at INTEGER,
+            verified_at INTEGER,
+            paystack_reference TEXT,
+            payment_url TEXT
+        );
+        CREATE TABLE IF NOT EXISTS meta (
+            k TEXT PRIMARY KEY,
+            v TEXT
+        );
+        CREATE TABLE IF NOT EXISTS turnitin_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            submission_id INTEGER,
+            success BOOLEAN,
+            source TEXT,
+            error_message TEXT,
+            created_at INTEGER
+        );
+        """)
+        db.commit()
+        
+        # Initialize global daily allocation
+        if not cur.execute("SELECT 1 FROM meta WHERE k='global_alloc'").fetchone():
+            cur.execute("INSERT INTO meta(k,v) VALUES('global_alloc','0')")
+        if not cur.execute("SELECT 1 FROM meta WHERE k='global_max'").fetchone():
+            cur.execute("INSERT INTO meta(k,v) VALUES('global_max','50')")
+        db.commit()
+        
+        print("✅ Database initialized successfully")
+    except Exception as e:
+        print(f"❌ Database initialization error: {e}")
+        raise
 
+# Initialize database
 init_db()
-
-# Initialize global daily allocation
-if not db.execute("SELECT 1 FROM meta WHERE k='global_alloc'").fetchone():
-    db.execute("INSERT INTO meta(k,v) VALUES('global_alloc','0')")
-    db.execute("INSERT INTO meta(k,v) VALUES('global_max','50')")
-    db.commit()
 
 # Updated Plan Configuration with Ghana Cedis
 PLANS = {
@@ -177,7 +204,16 @@ def user_get(user_id):
     cur = db.cursor()
     r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     if not r:
-        cur.execute("INSERT INTO users(user_id, created_at) VALUES(?, ?)", (user_id, now_ts()))
+        try:
+            # Try to insert with created_at
+            cur.execute("INSERT INTO users(user_id, created_at) VALUES(?, ?)", (user_id, now_ts()))
+        except sqlite3.OperationalError as e:
+            if "no such column" in str(e):
+                # Fallback: insert without created_at
+                print("🔄 Falling back to old schema for user creation")
+                cur.execute("INSERT INTO users(user_id) VALUES(?)", (user_id,))
+            else:
+                raise
         db.commit()
         r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     return r
@@ -459,27 +495,30 @@ def activate_user_subscription(user_id, plan):
 def check_subscription_expiry(user_id):
     """Check if user's subscription has expired"""
     user = user_get(user_id)
-    if user['expiry_date'] and user['subscription_active']:
-        expiry_date = datetime.datetime.strptime(user['expiry_date'], '%Y-%m-%d %H:%M:%S')
-        if datetime.datetime.now() > expiry_date:
-            # Subscription expired
-            cur = db.cursor()
-            cur.execute(
-                "UPDATE users SET plan='free', daily_limit=1, subscription_active=0 WHERE user_id=?",
-                (user_id,)
-            )
-            db.commit()
-            
-            # Send expiry notification
-            keyboard = create_inline_keyboard([
-                [("🔁 Renew Plan", "upgrade_after_free")]
-            ])
-            send_telegram_message(
-                user_id,
-                "⏰ Your 28-day subscription has expired.\nRenew anytime to continue using TurnitQ.",
-                reply_markup=keyboard
-            )
-            return True
+    if user.get('expiry_date') and user.get('subscription_active'):
+        try:
+            expiry_date = datetime.datetime.strptime(user['expiry_date'], '%Y-%m-%d %H:%M:%S')
+            if datetime.datetime.now() > expiry_date:
+                # Subscription expired
+                cur = db.cursor()
+                cur.execute(
+                    "UPDATE users SET plan='free', daily_limit=1, subscription_active=0 WHERE user_id=?",
+                    (user_id,)
+                )
+                db.commit()
+                
+                # Send expiry notification
+                keyboard = create_inline_keyboard([
+                    [("🔁 Renew Plan", "upgrade_after_free")]
+                ])
+                send_telegram_message(
+                    user_id,
+                    "⏰ Your 28-day subscription has expired.\nRenew anytime to continue using TurnitQ.",
+                    reply_markup=keyboard
+                )
+                return True
+        except (ValueError, TypeError):
+            pass
     return False
 
 # NEW FEATURE: Queue notification system
@@ -510,15 +549,18 @@ def send_user_info(user_id):
     
     # Format expiry date
     expiry_text = "No active subscription"
-    if user['expiry_date'] and user['subscription_active']:
-        expiry_date = datetime.datetime.strptime(user['expiry_date'], '%Y-%m-%d %H:%M:%S')
-        expiry_text = expiry_date.strftime('%Y-%m-%d')
+    if user.get('expiry_date') and user.get('subscription_active'):
+        try:
+            expiry_date = datetime.datetime.strptime(user['expiry_date'], '%Y-%m-%d %H:%M:%S')
+            expiry_text = expiry_date.strftime('%Y-%m-%d')
+        except (ValueError, TypeError):
+            expiry_text = "Invalid date"
     
     message = (
         f"👤 Your Account Info:\n"
         f"User ID: {user_id}\n"
-        f"Plan: {user['plan'].title()}\n"
-        f"Daily Total Checks: {user['used_today']}/{user['daily_limit']}\n"
+        f"Plan: {user.get('plan', 'free').title()}\n"
+        f"Daily Total Checks: {user.get('used_today', 0)}/{user.get('daily_limit', 1)}\n"
         f"Subscription ends: {expiry_text}"
     )
     
@@ -955,6 +997,8 @@ def home():
     <h1>TurnitQ Bot - Render Deployment</h1>
     <p>Status: 🟢 Running with Advanced Analysis & Paystack Payments</p>
     <p><a href="/debug">Debug Info</a></p>
+    <p><a href="/health">Health Check</a></p>
+    <p><a href="/debug-schema">Database Schema</a></p>
     """
 
 @app.route("/debug")
@@ -1005,6 +1049,49 @@ def test_paystack_webhook():
         "headers": dict(request.headers),
         "data": request.get_json(silent=True) or str(request.get_data())
     }), 200
+
+@app.route("/health")
+def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        cur = db.cursor()
+        cur.execute("SELECT 1")
+        db_status = "🟢 Connected"
+    except Exception as e:
+        db_status = f"🔴 Error: {e}"
+    
+    try:
+        # Test Telegram API
+        response = requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe")
+        telegram_status = "🟢 Connected" if response.json().get('ok') else "🔴 Error"
+    except Exception as e:
+        telegram_status = f"🔴 Error: {e}"
+    
+    return jsonify({
+        "status": "running",
+        "database": db_status,
+        "telegram": telegram_status,
+        "timestamp": now_ts()
+    })
+
+@app.route("/debug-schema")
+def debug_schema():
+    """Debug endpoint to check database schema"""
+    cur = db.cursor()
+    
+    tables = {}
+    for table in ['users', 'submissions', 'user_sessions', 'payments', 'meta', 'turnitin_logs']:
+        try:
+            cur.execute(f"PRAGMA table_info({table})")
+            tables[table] = [{"name": col[1], "type": col[2]} for col in cur.fetchall()]
+        except:
+            tables[table] = "Table doesn't exist"
+    
+    return jsonify({
+        "schema": tables,
+        "users_count": cur.execute("SELECT COUNT(*) FROM users").fetchone()[0] if cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").fetchone() else 0
+    })
       
 @app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
 def telegram_webhook(bot_token):
@@ -1330,30 +1417,6 @@ def setup_webhook():
         print(f"📡 Webhook result: {response.json()}")
     except Exception as e:
         print(f"❌ Webhook setup error: {e}")
-@app.route("/health")
-def health_check():
-    """Health check endpoint"""
-    try:
-        # Test database connection
-        cur = db.cursor()
-        cur.execute("SELECT 1")
-        db_status = "🟢 Connected"
-    except Exception as e:
-        db_status = f"🔴 Error: {e}"
-    
-    try:
-        # Test Telegram API
-        response = requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe")
-        telegram_status = "🟢 Connected" if response.json().get('ok') else "🔴 Error"
-    except Exception as e:
-        telegram_status = f"🔴 Error: {e}"
-    
-    return jsonify({
-        "status": "running",
-        "database": db_status,
-        "telegram": telegram_status,
-        "timestamp": now_ts()
-    })
 
 if __name__ == "__main__":
     print("🚀 Starting TurnitQ Bot on Render...")
