@@ -200,6 +200,12 @@ PLANS = {
 def now_ts():
     return int(time.time())
 
+def row_to_dict(row):
+    """Convert sqlite3.Row to dictionary"""
+    if row is None:
+        return {}
+    return {key: row[key] for key in row.keys()}
+
 def user_get(user_id):
     cur = db.cursor()
     r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
@@ -494,7 +500,7 @@ def activate_user_subscription(user_id, plan):
 # NEW FEATURE: Check subscription expiry
 def check_subscription_expiry(user_id):
     """Check if user's subscription has expired"""
-    user = user_get(user_id)
+    user = row_to_dict(user_get(user_id))
     if user.get('expiry_date') and user.get('subscription_active'):
         try:
             expiry_date = datetime.datetime.strptime(user['expiry_date'], '%Y-%m-%d %H:%M:%S')
@@ -542,7 +548,7 @@ def cancel_processing(user_id):
 # Enhanced user info display
 def send_user_info(user_id):
     """Send enhanced user account information"""
-    user = user_get(user_id)
+    user = row_to_dict(user_get(user_id))
     
     # Check subscription expiry
     check_subscription_expiry(user_id)
@@ -931,7 +937,9 @@ def process_document(submission_id, file_path, options):
                 filename=f"report_{filename}.txt"
             )
         
-        if turnitin_result.get("ai_report_path") and (user_get(user_id)['plan'] != 'free' or is_free_check):
+        # Fix: Convert user to dict before accessing plan
+        user_data = row_to_dict(user_get(user_id))
+        if turnitin_result.get("ai_report_path") and (user_data.get('plan') != 'free' or is_free_check):
             send_telegram_document(
                 user_id,
                 turnitin_result["ai_report_path"],
@@ -1128,13 +1136,13 @@ def telegram_webhook(bot_token):
                     created = now_ts()
                     cur = db.cursor()
                     
-                    user_data = user_get(user_id)
+                    user_data = row_to_dict(user_get(user_id))
                     print(f"🔍 User data: {dict(user_data)}")
                     
-                    is_free_check = user_data['free_checks_used'] == 0 and user_data['plan'] == 'free'
+                    is_free_check = user_data.get('free_checks_used', 0) == 0 and user_data.get('plan', 'free') == 'free'
                     
                     # Check if user already used free trial
-                    if not is_free_check and user_data['free_checks_used'] > 0 and user_data['plan'] == 'free':
+                    if not is_free_check and user_data.get('free_checks_used', 0) > 0 and user_data.get('plan', 'free') == 'free':
                         keyboard = create_inline_keyboard([
                             [("💎 Upgrade Plan", "upgrade_after_free")]
                         ])
@@ -1145,7 +1153,7 @@ def telegram_webhook(bot_token):
                         )
                         return "ok", 200
                     
-                    if user_data['used_today'] >= user_data['daily_limit']:
+                    if user_data.get('used_today', 0) >= user_data.get('daily_limit', 1):
                         send_telegram_message(user_id, "⚠️ Daily limit reached. Upgrade for more.")
                         return "ok", 200
                     
@@ -1216,8 +1224,8 @@ def telegram_webhook(bot_token):
                     send_telegram_message(user_id, "⚠️ Only .pdf and .docx files allowed.")
                     return "ok", 200
 
-                u = user_get(user_id)
-                if u["used_today"] >= u["daily_limit"]:
+                u = row_to_dict(user_get(user_id))
+                if u.get('used_today', 0) >= u.get('daily_limit', 1):
                     send_telegram_message(user_id, "⚠️ Daily limit reached. Upgrade for more.")
                     return "ok", 200
 
