@@ -1030,7 +1030,7 @@ def telegram_webhook(bot_token):
                 
                 # Create Paystack payment
                 
-                payment_url = create_paystack_payment(user_id, plan)
+                payment_url,reference = create_paystack_payment(user_id, plan)
                 
                 if payment_url:
                      
