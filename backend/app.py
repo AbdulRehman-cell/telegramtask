@@ -1012,8 +1012,16 @@ def telegram_webhook(bot_token):
         return "🤖 Webhook active! Send POST requests."
     
     try:
-        update_data = request.get_json(force=True)
+        print("📨 Received webhook request")
         
+        # Log the request data for debugging
+        update_data = request.get_json(force=True)
+        print(f"🔍 Webhook data: {json.dumps(update_data, indent=2)}")
+        
+        if not update_data:
+            print("❌ No JSON data in request")
+            return "ok", 200
+            
         if 'message' in update_data:
             message = update_data['message']
             user_id = message['from']['id']
@@ -1021,8 +1029,12 @@ def telegram_webhook(bot_token):
             
             print(f"👤 User {user_id}: {text}")
             
+            # Initialize user session first
             session = get_user_session(user_id)
+            print(f"🔍 User session: {dict(session)}")
+            
             if session['waiting_for_options'] and text:
+                print("🔍 Processing options response")
                 options = parse_options_response(text)
                 if options:
                     update_user_session(user_id, waiting_for_options=0)
@@ -1030,6 +1042,8 @@ def telegram_webhook(bot_token):
                     cur = db.cursor()
                     
                     user_data = user_get(user_id)
+                    print(f"🔍 User data: {dict(user_data)}")
+                    
                     is_free_check = user_data['free_checks_used'] == 0 and user_data['plan'] == 'free'
                     
                     # Check if user already used free trial
@@ -1074,14 +1088,18 @@ def telegram_webhook(bot_token):
             
             # Handle commands
             if text.startswith("/start"):
+                print("🔍 Processing /start command")
                 send_telegram_message(user_id, 
                     "👋 Welcome to TurnitQ!\nAdvanced document analysis with AI detection.\n\n"
                     "Commands:\n/check - Analyze document\n/id - Account info\n/upgrade - Upgrade plan\n/cancel - Cancel current check")
             elif text.startswith("/check"):
+                print("🔍 Processing /check command")
                 send_telegram_message(user_id, "📄 Upload your document (.pdf or .docx)")
             elif text.startswith("/id"):
+                print("🔍 Processing /id command")
                 send_user_info(user_id)
             elif text.startswith("/upgrade"):
+                print("🔍 Processing /upgrade command")
                 keyboard = create_inline_keyboard([
                     [("⚡ Premium - $8 (₡88)", "plan_premium")],
                     [("🚀 Pro - $29 (₡319)", "plan_pro")],
@@ -1096,11 +1114,13 @@ def telegram_webhook(bot_token):
                     reply_markup=keyboard
                 )
             elif text.startswith("/cancel"):
+                print("🔍 Processing /cancel command")
                 if cancel_processing(user_id):
                     return "ok", 200
                 else:
                     send_telegram_message(user_id, "❌ No active check to cancel.")
             elif 'document' in message:
+                print("🔍 Processing document upload")
                 doc = message['document']
                 filename = doc.get('file_name', f"file_{now_ts()}")
                 file_id = doc['file_id']
@@ -1123,23 +1143,29 @@ def telegram_webhook(bot_token):
                 ask_for_report_options(user_id)
             else:
                 # Invalid command
+                print("🔍 Processing invalid command")
                 send_telegram_message(
                     user_id,
                     "⚠️ Please use one of the available commands:\n/check • /cancel • /upgrade • /id"
                 )
 
         elif 'callback_query' in update_data:
+            print("🔍 Processing callback query")
             callback = update_data['callback_query']
             user_id = callback['from']['id']
             data = callback['data']
+            
+            print(f"🔍 Callback data: {data} from user {user_id}")
             
             if data.startswith("plan_"):
                 plan = data.replace("plan_", "")
                 plan_data = PLANS[plan]
                 
+                print(f"🔍 Creating payment for plan: {plan}")
+                
                 # Create Paystack payment
                 payment_url, reference = create_paystack_payment(user_id, plan)
-                print(payment_url, reference)
+                print(f"🔍 Payment result - URL: {payment_url}, Reference: {reference}")
                 
                 if payment_url:
                     keyboard1 = {
@@ -1156,6 +1182,7 @@ def telegram_webhook(bot_token):
                     send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
                     
             elif data == "upgrade_after_free":
+                print("🔍 Processing upgrade after free")
                 keyboard = create_inline_keyboard([
                     [("⚡ Premium - $8 (₡88)", "plan_premium")],
                     [("🚀 Pro - $29 (₡319)", "plan_pro")],
@@ -1169,11 +1196,16 @@ def telegram_webhook(bot_token):
                     "👑 Elite — $79/month, 70 checks per day",
                     reply_markup=keyboard
                 )
+            else:
+                print(f"❌ Unknown callback data: {data}")
                 
+        print("✅ Webhook processed successfully")
         return "ok", 200
         
     except Exception as e:
         print(f"❌ Webhook error: {e}")
+        import traceback
+        traceback.print_exc()
         return "error", 500
     
 @app.route("/paystack-webhook", methods=["POST"])
@@ -1298,6 +1330,30 @@ def setup_webhook():
         print(f"📡 Webhook result: {response.json()}")
     except Exception as e:
         print(f"❌ Webhook setup error: {e}")
+@app.route("/health")
+def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        cur = db.cursor()
+        cur.execute("SELECT 1")
+        db_status = "🟢 Connected"
+    except Exception as e:
+        db_status = f"🔴 Error: {e}"
+    
+    try:
+        # Test Telegram API
+        response = requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe")
+        telegram_status = "🟢 Connected" if response.json().get('ok') else "🔴 Error"
+    except Exception as e:
+        telegram_status = f"🔴 Error: {e}"
+    
+    return jsonify({
+        "status": "running",
+        "database": db_status,
+        "telegram": telegram_status,
+        "timestamp": now_ts()
+    })
 
 if __name__ == "__main__":
     print("🚀 Starting TurnitQ Bot on Render...")
