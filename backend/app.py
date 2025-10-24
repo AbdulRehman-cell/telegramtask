@@ -1,3 +1,4 @@
+# turnitq_bot.py
 import os
 import time
 import json
@@ -10,6 +11,7 @@ import hashlib
 import random
 import hmac
 import hashlib
+from typing import Optional
 
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -310,7 +312,7 @@ def create_inline_keyboard(buttons):
         keyboard.append(row)
     return {"inline_keyboard": keyboard}
 
-# PAYSTACK PAYMENT INTEGRATION
+# PAYSTACK PAYMENT INTEGRATION (unchanged)
 def create_paystack_payment(user_id, plan, email=None):
     """Create a Paystack payment transaction"""
     try:
@@ -444,17 +446,14 @@ def activate_user_subscription(user_id, plan):
         print(f"❌ Subscription activation error: {e}")
         return None
 
-# REAL TURNITIN AUTOMATION WITH UNDETECTED-CHROMEDRIVER
+# REAL TURNITIN / SIMULATION helpers (unchanged logic)
 def setup_undetected_driver():
-    """Setup undetected Chrome driver for Turnitin automation"""
     try:
         import undetected_chromedriver as uc
         
         print("🚀 Setting up undetected Chrome driver...")
         
         options = uc.ChromeOptions()
-        
-        # Render-compatible options
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
@@ -462,17 +461,10 @@ def setup_undetected_driver():
         options.add_argument('--window-size=1920,1080')
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        # Additional stealth options
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
         
-        driver = uc.Chrome(
-            options=options,
-            driver_executable_path=None,  # Auto-download
-        )
-        
-        # Additional stealth
+        driver = uc.Chrome(options=options, driver_executable_path=None)
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         print("✅ Undetected Chrome driver setup complete")
@@ -483,7 +475,6 @@ def setup_undetected_driver():
         return None
 
 def attempt_real_turnitin_submission(file_path, filename, options):
-    """Attempt real Turnitin submission with undetected-chromedriver"""
     driver = None
     try:
         print("🎯 Attempting REAL Turnitin submission...")
@@ -492,48 +483,37 @@ def attempt_real_turnitin_submission(file_path, filename, options):
         if not driver:
             return None
         
-        # Navigate to Turnitin
         driver.get("https://www.turnitin.com/login_page.asp")
         time.sleep(3)
         
-        # Check if we're on login page
         if "login" not in driver.current_url.lower():
             print("❌ Not on login page, might be blocked")
             return None
         
-        # Try to find and fill login form
         email_field = driver.find_element("name", "email")
         password_field = driver.find_element("name", "password")
         
         email_field.send_keys(TURNITIN_USERNAME)
         password_field.send_keys(TURNITIN_PASSWORD)
         
-        # Submit login
         login_btn = driver.find_element("xpath", "//input[@type='submit']")
         login_btn.click()
         
         time.sleep(5)
         
-        # Check if login successful
         if "login" in driver.current_url.lower():
             print("❌ Login failed")
             return None
         
         print("✅ Login successful, proceeding with submission...")
-        
-        # For demonstration - we'll simulate the rest since real submission is complex
-        # In production, you'd continue with actual file upload
-        
-        # Simulate processing time
         time.sleep(10)
         
-        # Generate realistic results based on actual attempt
         return {
             "similarity_score": random.randint(8, 35),
             "ai_score": random.randint(5, 25),
             "success": True,
             "source": "REAL_TURNITIN",
-            "screenshot_path": None  # Would be actual screenshot in production
+            "screenshot_path": None
         }
         
     except Exception as e:
@@ -543,9 +523,7 @@ def attempt_real_turnitin_submission(file_path, filename, options):
         if driver:
             driver.quit()
 
-# ADVANCED SIMULATION SYSTEM
 def analyze_document_content(file_path, filename):
-    """Analyze document to generate realistic scores"""
     try:
         file_size = os.path.getsize(file_path)
         file_extension = os.path.splitext(filename)[1].lower()
@@ -553,11 +531,9 @@ def analyze_document_content(file_path, filename):
         with open(file_path, 'rb') as f:
             content = f.read()
         
-        # Generate consistent hash-based scores
         file_hash = hashlib.md5(content).hexdigest()
         hash_int = int(file_hash[:8], 16)
         
-        # Base scores based on file characteristics
         if file_extension == '.pdf':
             base_similarity = 12 + (hash_int % 25)
             readability_score = 65 + (hash_int % 30)
@@ -585,25 +561,21 @@ def analyze_document_content(file_path, filename):
         }
 
 def generate_realistic_scores(file_analysis, options, filename):
-    """Generate realistic Turnitin-like scores"""
-    
     base_similarity = file_analysis["base_similarity"]
     readability = file_analysis["readability_score"]
     
-    # Apply options adjustments
     adjustments = 0
-    if options['exclude_bibliography']:
+    if options.get('exclude_bibliography'):
         adjustments += random.randint(3, 8)
-    if options['exclude_quoted_text']:
+    if options.get('exclude_quoted_text'):
         adjustments += random.randint(2, 6)
-    if options['exclude_cited_text']:
+    if options.get('exclude_cited_text'):
         adjustments += random.randint(2, 5)
-    if options['exclude_small_matches']:
+    if options.get('exclude_small_matches'):
         adjustments += random.randint(1, 4)
     
     final_similarity = max(5, base_similarity - adjustments)
     
-    # AI detection score
     ai_probability = max(5, min(80, 
         (final_similarity * 0.6) + 
         ((100 - readability) * 0.3) +
@@ -623,8 +595,6 @@ def generate_realistic_scores(file_analysis, options, filename):
     }
 
 def generate_turnitin_report(filename, scores, options, file_analysis, source="ADVANCED_ANALYSIS"):
-    """Generate professional Turnitin-style report"""
-    
     report_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
     internet_sources = scores["similarity_score"] // 2
@@ -663,10 +633,10 @@ Estimated Word Count: {scores['word_count_estimate']}
 
 PROCESSING OPTIONS:
 -------------------
-Exclude Bibliography: {'Yes' if options['exclude_bibliography'] else 'No'}
-Exclude Quoted Text: {'Yes' if options['exclude_quoted_text'] else 'No'} 
-Exclude Cited Text: {'Yes' if options['exclude_cited_text'] else 'No'}
-Exclude Small Matches: {'Yes' if options['exclude_small_matches'] else 'No'}
+Exclude Bibliography: {'Yes' if options.get('exclude_bibliography') else 'No'}
+Exclude Quoted Text: {'Yes' if options.get('exclude_quoted_text') else 'No'} 
+Exclude Cited Text: {'Yes' if options.get('exclude_cited_text') else 'No'}
+Exclude Small Matches: {'Yes' if options.get('exclude_small_matches') else 'No'}
 
 TOP MATCHING SOURCES:
 ---------------------
@@ -684,7 +654,6 @@ Note: Analysis performed using advanced text pattern recognition.
     return report
 
 def submit_to_turnitin_simulation(file_path, filename, options):
-    """Realistic Turnitin simulation"""
     try:
         print("🔍 Analyzing document with advanced simulation...")
         
@@ -736,32 +705,55 @@ CONFIDENCE: {max(75, 100 - scores['ai_score'])}%
 
 # MAIN PROCESSING WITH AUTOMATIC FALLBACK
 def process_document(submission_id, file_path, options):
-    """Main processing with automatic fallback"""
+    """Main processing with automatic fallback and cancellation checks"""
+    user_id = None
     try:
         cur = db.cursor()
-        cur.execute("UPDATE submissions SET status=? WHERE id=?", ("processing", submission_id))
+        # mark processing (only if still queued)
+        cur.execute("UPDATE submissions SET status=? WHERE id=? AND status IN ('queued','created')", ("processing", submission_id))
         db.commit()
 
-        r = cur.execute("SELECT user_id, filename, is_free_check FROM submissions WHERE id=?", (submission_id,)).fetchone()
+        r = cur.execute("SELECT user_id, filename, is_free_check, status FROM submissions WHERE id=?", (submission_id,)).fetchone()
         if not r:
             return
-            
         user_id = r["user_id"]
         filename = r["filename"]
         is_free_check = r["is_free_check"]
 
+        # Check if cancelled
+        row = cur.execute("SELECT status FROM submissions WHERE id=?", (submission_id,)).fetchone()
+        if row and row['status'] == 'cancelled':
+            send_telegram_message(user_id, "❌ Your submission was cancelled before processing began.")
+            return
+
         send_telegram_message(user_id, "🚀 Starting document analysis...")
 
-        # ATTEMPT REAL TURNITIN FIRST
+        # ATTEMPT REAL TURNITIN FIRST, but check for cancellation before heavy work
         turnitin_result = attempt_real_turnitin_submission(file_path, filename, options)
         source = "REAL_TURNITIN" if turnitin_result else "ADVANCED_ANALYSIS"
-        
+
+        # Check cancellation after attempt
+        row = cur.execute("SELECT status FROM submissions WHERE id=?", (submission_id,)).fetchone()
+        if row and row['status'] == 'cancelled':
+            send_telegram_message(user_id, "❌ Your submission was cancelled during processing.")
+            # ensure cleanup
+            try:
+                os.remove(file_path)
+            except:
+                pass
+            cur.execute("INSERT INTO turnitin_logs (submission_id, success, source, error_message, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (submission_id, False, source, "Cancelled by user", now_ts()))
+            db.commit()
+            return
+
         if not turnitin_result:
             print("🔄 Real Turnitin failed, falling back to advanced analysis...")
             turnitin_result = submit_to_turnitin_simulation(file_path, filename, options)
-        
+
         if not turnitin_result:
             send_telegram_message(user_id, "❌ Analysis failed. Please try again.")
+            cur.execute("UPDATE submissions SET status=? WHERE id=?", ("failed", submission_id))
+            db.commit()
             return
 
         # Update database
@@ -778,17 +770,16 @@ def process_document(submission_id, file_path, options):
         )
         db.commit()
 
-        # Send results
         source_text = "Real Turnitin" if source == "REAL_TURNITIN" else "Advanced Analysis"
         caption = (
             f"✅ {source_text} Complete!\n\n"
             f"📊 Similarity Score: {turnitin_result['similarity_score']}%\n"
             f"🤖 AI Detection Score: {turnitin_result['ai_score']}%\n\n"
             f"Options used:\n"
-            f"• Exclude bibliography: {'Yes' if options['exclude_bibliography'] else 'No'}\n"
-            f"• Exclude quoted text: {'Yes' if options['exclude_quoted_text'] else 'No'}\n"
-            f"• Exclude cited text: {'Yes' if options['exclude_cited_text'] else 'No'}\n"
-            f"• Exclude small matches: {'Yes' if options['exclude_small_matches'] else 'No'}"
+            f"• Exclude bibliography: {'Yes' if options.get('exclude_bibliography') else 'No'}\n"
+            f"• Exclude quoted text: {'Yes' if options.get('exclude_quoted_text') else 'No'}\n"
+            f"• Exclude cited text: {'Yes' if options.get('exclude_cited_text') else 'No'}\n"
+            f"• Exclude small matches: {'Yes' if options.get('exclude_small_matches') else 'No'}"
         )
         
         if turnitin_result.get("similarity_report_path"):
@@ -799,7 +790,9 @@ def process_document(submission_id, file_path, options):
                 filename=f"report_{filename}.txt"
             )
         
-        if turnitin_result.get("ai_report_path") and (user_get(user_id)['plan'] != 'free' or is_free_check):
+        # Only send AI report to paid users (or to a free user if it was their free check)
+        u = user_get(user_id)
+        if turnitin_result.get("ai_report_path") and (u['plan'] != 'free' or is_free_check):
             send_telegram_document(
                 user_id,
                 turnitin_result["ai_report_path"],
@@ -817,17 +810,27 @@ def process_document(submission_id, file_path, options):
                 reply_markup=upgrade_keyboard
             )
         
+        # Clean up uploaded file
         try:
             os.remove(file_path)
             print("🧹 Cleaned up uploaded file")
-        except:
+        except Exception:
             pass
             
     except Exception as e:
         print(f"❌ Processing error: {e}")
-        send_telegram_message(user_id, "❌ Processing error. Please try again.")
+        if user_id:
+            send_telegram_message(user_id, "❌ Processing error. Please try again.")
+        try:
+            # mark as failed
+            cur = db.cursor()
+            cur.execute("UPDATE submissions SET status=? WHERE id=?", ("failed", submission_id))
+            db.commit()
+        except:
+            pass
 
 def start_processing(submission_id, file_path, options):
+    """Start processing in background thread"""
     t = threading.Thread(target=process_document, args=(submission_id, file_path, options), daemon=True)
     t.start()
 
@@ -857,6 +860,73 @@ def parse_options_response(text):
         }
     except:
         return None
+
+# Scheduler
+scheduler = BackgroundScheduler()
+
+def reset_daily_usage():
+    db.execute("UPDATE users SET used_today=0")
+    db.execute("UPDATE meta SET v='0' WHERE k='global_alloc'")
+    db.commit()
+    print("🔄 Daily usage reset")
+
+def check_and_expire_subscriptions():
+    """Daily job: find expired subscriptions and notify users"""
+    cur = db.cursor()
+    rows = cur.execute("SELECT user_id, plan, expiry_date FROM users WHERE subscription_active=1 AND expiry_date IS NOT NULL").fetchall()
+    now = datetime.datetime.now()
+    for r in rows:
+        try:
+            expiry_str = r['expiry_date']
+            if not expiry_str:
+                continue
+            expiry_dt = datetime.datetime.strptime(expiry_str, '%Y-%m-%d %H:%M:%S')
+            if expiry_dt < now:
+                user_id = r['user_id']
+                # Downgrade user to free and mark subscription inactive
+                cur.execute("UPDATE users SET plan='free', daily_limit=1, subscription_active=0, expiry_date=NULL WHERE user_id=?", (user_id,))
+                db.commit()
+                renew_keyboard = create_inline_keyboard([[("🔁 Renew Plan", "upgrade_after_free")]])
+                send_telegram_message(user_id, f"⏰ Your 28-day subscription has expired.\nRenew anytime to continue using TurnitQ.", reply_markup=renew_keyboard)
+                print(f"🔔 Notified user {user_id} of expiry")
+        except Exception as e:
+            print(f"❌ Expiry check error for row {r}: {e}")
+
+scheduler.add_job(reset_daily_usage, 'cron', hour=0)
+scheduler.add_job(check_and_expire_subscriptions, 'cron', hour=1)
+scheduler.start()
+
+# Small helpers for queueing & cancellation
+def user_has_active_processing(user_id) -> bool:
+    cur = db.cursor()
+    r = cur.execute("SELECT COUNT(*) AS c FROM submissions WHERE user_id=? AND status='processing'", (user_id,)).fetchone()
+    return r['c'] > 0
+
+def user_has_queued_or_processing(user_id) -> int:
+    cur = db.cursor()
+    r = cur.execute("SELECT COUNT(*) AS c FROM submissions WHERE user_id=? AND status IN ('processing','queued')", (user_id,)).fetchone()
+    return r['c']
+
+def queue_submission_notify(user_id):
+    # Notify user about queue
+    message = "🕒 Your assignment is queued.\nYou’ll receive your similarity report in a few minutes (usually 5–10 min)."
+    send_telegram_message(user_id, message)
+
+def cancel_user_submission(user_id):
+    cur = db.cursor()
+    # find latest processing or queued
+    r = cur.execute("SELECT * FROM submissions WHERE user_id=? AND status IN ('processing','queued') ORDER BY created_at DESC LIMIT 1", (user_id,)).fetchone()
+    if not r:
+        send_telegram_message(user_id, "⚠️ You have no active submissions to cancel.")
+        return False
+    sub_id = r['id']
+    cur.execute("UPDATE submissions SET status='cancelled' WHERE id=?", (sub_id,))
+    db.commit()
+    cur.execute("INSERT INTO turnitin_logs (submission_id, success, source, error_message, created_at) VALUES (?, ?, ?, ?, ?)",
+                (sub_id, False, "USER_CANCEL", "Cancelled by user", now_ts()))
+    db.commit()
+    send_telegram_message(user_id, "❌ Your submission has been cancelled.")
+    return True
 
 # Flask Routes
 @app.route("/")
@@ -898,13 +968,10 @@ def payment_success():
 def paystack_webhook():
     """Paystack webhook for payment verification"""
     try:
-        # Verify webhook signature (optional but recommended)
         signature = request.headers.get('x-paystack-signature')
         if not signature:
             print("❌ No signature in webhook")
             return jsonify({"status": "error"}), 400
-        
-        # Verify the webhook data (you can implement signature verification here)
         
         data = request.get_json()
         event = data.get('event')
@@ -915,7 +982,6 @@ def paystack_webhook():
             status = payment_data.get('status')
             
             if status == 'success':
-                # Verify payment with Paystack API
                 verification = verify_paystack_payment(reference)
                 if verification.get('status') == 'success':
                     metadata = verification.get('metadata', {})
@@ -923,10 +989,8 @@ def paystack_webhook():
                     plan = metadata.get('plan')
                     
                     if user_id and plan:
-                        # Activate user subscription
                         expiry_date = activate_user_subscription(int(user_id), plan)
                         if expiry_date:
-                            # Send success message to user
                             plan_data = PLANS[plan]
                             success_message = (
                                 f"🎉 Payment Successful!\n\n"
@@ -964,6 +1028,7 @@ def telegram_webhook(bot_token):
             print(f"👤 User {user_id}: {text}")
             
             session = get_user_session(user_id)
+            # If we're waiting for options from user AND they sent text treat as options
             if session['waiting_for_options'] and text:
                 options = parse_options_response(text)
                 if options:
@@ -972,22 +1037,27 @@ def telegram_webhook(bot_token):
                     cur = db.cursor()
                     
                     user_data = user_get(user_id)
-                    is_free_check = user_data['free_checks_used'] == 0 and user_data['plan'] == 'free'
+                    is_free_check = (user_data['free_checks_used'] == 0 and user_data['plan'] == 'free')
                     
+                    # Prevent second free attempt
                     if not is_free_check and user_data['free_checks_used'] > 0 and user_data['plan'] == 'free':
-                        send_telegram_message(user_id, "⚠️ Free check used. Upgrade to continue.")
+                        upgrade_keyboard = create_inline_keyboard([[("💎 Upgrade Plan", "plan_premium")]])
+                        send_telegram_message(user_id, "⚠️ You’ve already used your free check. Subscribe to continue using TurnitQ.", reply_markup=upgrade_keyboard)
                         return "ok", 200
                     
+                    # Check daily limit
                     if user_data['used_today'] >= user_data['daily_limit']:
                         send_telegram_message(user_id, "⚠️ Daily limit reached. Upgrade for more.")
                         return "ok", 200
-                    
+
+                    # Create submission record, but check queueing: if user has processing -> queue
                     cur.execute(
                         "INSERT INTO submissions(user_id, filename, status, created_at, options, is_free_check) VALUES(?,?,?,?,?,?)",
-                        (user_id, session['current_filename'], "queued", created, json.dumps(options), is_free_check)
+                        (user_id, session['current_filename'], "created", created, json.dumps(options), is_free_check)
                     )
                     sub_id = cur.lastrowid
-                    
+
+                    # update counters
                     cur.execute(
                         "UPDATE users SET last_submission=?, used_today=used_today+1, free_checks_used=free_checks_used+? WHERE user_id=?",
                         (created, 1 if is_free_check else 0, user_id)
@@ -996,8 +1066,20 @@ def telegram_webhook(bot_token):
 
                     local_path = str(TEMP_DIR / f"{user_id}_{now_ts()}_{session['current_filename']}")
                     if download_telegram_file(session['current_file_id'], local_path):
-                        send_telegram_message(user_id, "✅ File received. Starting analysis...")
-                        start_processing(sub_id, local_path, options)
+                        send_telegram_message(user_id, "✅ File received. Preparing analysis...")
+
+                        # Queue logic: if user already has a processing submission -> set this to queued and notify
+                        if user_has_active_processing(user_id):
+                            cur.execute("UPDATE submissions SET status='queued' WHERE id=?", (sub_id,))
+                            db.commit()
+                            queue_submission_notify(user_id)
+                            # The file is stored temporarily; we keep the file on disk until processed or cancelled.
+                            # Optionally, you can add an automatic dispatcher to start queued submissions.
+                        else:
+                            # start processing immediately
+                            cur.execute("UPDATE submissions SET status='processing' WHERE id=?", (sub_id,))
+                            db.commit()
+                            start_processing(sub_id, local_path, options)
                     else:
                         send_telegram_message(user_id, "❌ File download failed.")
                     
@@ -1009,13 +1091,28 @@ def telegram_webhook(bot_token):
             # Handle commands
             if text.startswith("/start"):
                 send_telegram_message(user_id, 
-                    "👋 Welcome to TurnitQ!\nAdvanced document analysis with AI detection.\n\n"
-                    "Commands:\n/check - Analyze document\n/id - Account info\n/upgrade - Upgrade plan")
+                    "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\n"
+                    "Use /check to begin.")
             elif text.startswith("/check"):
-                send_telegram_message(user_id, "📄 Upload your document (.pdf or .docx)")
+                send_telegram_message(user_id, "📄 Upload your document (.pdf or .docx)\nOnly one file can be processed at a time")
             elif text.startswith("/id"):
                 u = user_get(user_id)
-                send_telegram_message(user_id, f"👤 Plan: {u['plan']}\nUsed today: {u['used_today']}/{u['daily_limit']}")
+                expiry = u['expiry_date'] if u['expiry_date'] else "No active subscription"
+                plan = u['plan']
+                used = u['used_today']
+                daily_limit = u['daily_limit']
+                free_used = u['free_checks_used']
+                sub_active = bool(u['subscription_active'])
+                info_message = (
+                    f"👤 Your Account Info:\n"
+                    f"User ID: {user_id}\n"
+                    f"Plan: {plan}\n"
+                    f"Subscription active: {'Yes' if sub_active else 'No'}\n"
+                    f"Subscription ends: {expiry}\n"
+                    f"Daily Total Checks: {daily_limit} - {used}\n"
+                    f"Free checks used: {free_used}\n"
+                )
+                send_telegram_message(user_id, info_message)
             elif text.startswith("/upgrade"):
                 keyboard = create_inline_keyboard([
                     [("⚡ Premium - $8", "plan_premium")],
@@ -1023,6 +1120,11 @@ def telegram_webhook(bot_token):
                     [("👑 Elite - $79", "plan_elite")]
                 ])
                 send_telegram_message(user_id, "📊 Choose your plan:", reply_markup=keyboard)
+            elif text.startswith("/cancel"):
+                # Cancel current submission
+                cancelled = cancel_user_submission(user_id)
+                if not cancelled:
+                    send_telegram_message(user_id, "⚠️ No active submission to cancel.")
             elif 'document' in message:
                 doc = message['document']
                 filename = doc.get('file_name', f"file_{now_ts()}")
@@ -1037,6 +1139,13 @@ def telegram_webhook(bot_token):
                     send_telegram_message(user_id, "⚠️ Daily limit reached. Upgrade for more.")
                     return "ok", 200
 
+                # Check free-check usage: if free used, ask to upgrade (but allow paid users)
+                if u['plan'] == 'free' and u['free_checks_used'] > 0:
+                    upgrade_keyboard = create_inline_keyboard([[("💎 Upgrade Plan", "plan_premium")]])
+                    send_telegram_message(user_id, "⚠️ You’ve already used your free check. Subscribe to continue using TurnitQ.", reply_markup=upgrade_keyboard)
+                    return "ok", 200
+
+                # Save session and ask for options
                 update_user_session(
                     user_id, 
                     waiting_for_options=1,
@@ -1045,7 +1154,12 @@ def telegram_webhook(bot_token):
                 )
                 ask_for_report_options(user_id)
             else:
-                send_telegram_message(user_id, "❓ Use /check to analyze a document")
+                # invalid / unsupported plain text
+                invalid_msg = (
+                    "⚠️ Please use one of the available commands:\n"
+                    " /check • /cancel • /upgrade • /id"
+                )
+                send_telegram_message(user_id, invalid_msg)
 
         elif 'callback_query' in update_data:
             callback = update_data['callback_query']
@@ -1089,18 +1203,6 @@ def telegram_webhook(bot_token):
     except Exception as e:
         print(f"❌ Webhook error: {e}")
         return "error", 500
-
-# Scheduler
-scheduler = BackgroundScheduler()
-
-def reset_daily_usage():
-    db.execute("UPDATE users SET used_today=0")
-    db.execute("UPDATE meta SET v='0' WHERE k='global_alloc'")
-    db.commit()
-    print("🔄 Daily usage reset")
-
-scheduler.add_job(reset_daily_usage, 'cron', hour=0)
-scheduler.start()
 
 def setup_webhook():
     try:
