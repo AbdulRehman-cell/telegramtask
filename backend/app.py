@@ -1041,11 +1041,11 @@ def telegram_webhook(bot_token):
                     f"• AI detection analysis\n"
                     f"• Priority processing\n\n"
                     f"Click the link below to complete your payment:\n"
-                    f"<a href=\"{payment_url}\">Pay ${plan_data['price']} with Paystack</a>\n\n"
+                    f"<a href=\"{payment_url}\">Pay ${plan_data['price']} with Paystack</a>"
                     f"After payment, your account will be upgraded automatically!"
                     )
 
-                     send_telegram_message(user_id, payment_message,parse_mode="HTML")
+                     send_telegram_message(user_id, payment_message)
 
                 else:
                     send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
