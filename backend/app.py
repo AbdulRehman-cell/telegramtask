@@ -67,7 +67,8 @@ def init_db():
         expiry_date TEXT,
         last_submission INTEGER DEFAULT 0,
         free_checks_used INTEGER DEFAULT 0,
-        subscription_active BOOLEAN DEFAULT 0
+        subscription_active BOOLEAN DEFAULT 0,
+        created_at INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS submissions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +88,8 @@ def init_db():
         waiting_for_options BOOLEAN DEFAULT 0,
         current_file_path TEXT,
         current_filename TEXT,
-        current_file_id TEXT
+        current_file_id TEXT,
+        cancel_requested BOOLEAN DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,26 +126,28 @@ if not db.execute("SELECT 1 FROM meta WHERE k='global_alloc'").fetchone():
     db.execute("INSERT INTO meta(k,v) VALUES('global_max','50')")
     db.commit()
 
-# Plan Configuration
+# Updated Plan Configuration with Ghana Cedis
 PLANS = {
     "premium": {
         "name": "Premium",
-        "daily_limit": 5,
+        "daily_limit": 3,  # Changed from 5 to 3
         "price": 8,
+        "ghana_cedis": 88,
         "duration_days": 28,
         "features": [
-            "Up to 5 checks per day",
+            "Up to 3 checks per day",
             "Full similarity report", 
             "Faster results"
         ]
     },
     "pro": {
         "name": "Pro", 
-        "daily_limit": 30,
+        "daily_limit": 20,  # Changed from 30 to 20
         "price": 29,
+        "ghana_cedis": 319,
         "duration_days": 28,
         "features": [
-            "Up to 30 checks per day",
+            "Up to 20 checks per day",
             "Full similarity report",
             "Faster results", 
             "AI-generated report",
@@ -152,11 +156,12 @@ PLANS = {
     },
     "elite": {
         "name": "Elite",
-        "daily_limit": 100, 
+        "daily_limit": 70,  # Changed from 100 to 70
         "price": 79,
+        "ghana_cedis": 869,
         "duration_days": 28,
         "features": [
-            "Up to 100 checks per day",
+            "Up to 70 checks per day",
             "Priority processing",
             "Full similarity report",
             "AI-generated report"
@@ -172,7 +177,7 @@ def user_get(user_id):
     cur = db.cursor()
     r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     if not r:
-        cur.execute("INSERT INTO users(user_id) VALUES(?)", (user_id,))
+        cur.execute("INSERT INTO users(user_id, created_at) VALUES(?, ?)", (user_id, now_ts()))
         db.commit()
         r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     return r
@@ -303,10 +308,16 @@ def create_inline_keyboard(buttons):
     for button_row in buttons:
         row = []
         for button in button_row:
-            row.append({
-                "text": button[0],
-                "callback_data": button[1]
-            })
+            if len(button) == 3 and button[2] == "url":
+                row.append({
+                    "text": button[0],
+                    "url": button[1]
+                })
+            else:
+                row.append({
+                    "text": button[0],
+                    "callback_data": button[1]
+                })
         keyboard.append(row)
     return {"inline_keyboard": keyboard}
 
@@ -443,6 +454,75 @@ def activate_user_subscription(user_id, plan):
     except Exception as e:
         print(f"❌ Subscription activation error: {e}")
         return None
+
+# NEW FEATURE: Check subscription expiry
+def check_subscription_expiry(user_id):
+    """Check if user's subscription has expired"""
+    user = user_get(user_id)
+    if user['expiry_date'] and user['subscription_active']:
+        expiry_date = datetime.datetime.strptime(user['expiry_date'], '%Y-%m-%d %H:%M:%S')
+        if datetime.datetime.now() > expiry_date:
+            # Subscription expired
+            cur = db.cursor()
+            cur.execute(
+                "UPDATE users SET plan='free', daily_limit=1, subscription_active=0 WHERE user_id=?",
+                (user_id,)
+            )
+            db.commit()
+            
+            # Send expiry notification
+            keyboard = create_inline_keyboard([
+                [("🔁 Renew Plan", "upgrade_after_free")]
+            ])
+            send_telegram_message(
+                user_id,
+                "⏰ Your 28-day subscription has expired.\nRenew anytime to continue using TurnitQ.",
+                reply_markup=keyboard
+            )
+            return True
+    return False
+
+# NEW FEATURE: Queue notification system
+def send_queue_notification(user_id, estimated_minutes=5):
+    """Send queue notification to user"""
+    send_telegram_message(
+        user_id,
+        f"🕒 Your assignment is queued.\nYou'll receive your similarity report in a few minutes (usually {estimated_minutes} min)."
+    )
+
+# NEW FEATURE: Cancel processing
+def cancel_processing(user_id):
+    """Cancel user's current processing"""
+    session = get_user_session(user_id)
+    if session['waiting_for_options']:
+        update_user_session(user_id, waiting_for_options=0, cancel_requested=1)
+        send_telegram_message(user_id, "❌ Your check has been cancelled.")
+        return True
+    return False
+
+# Enhanced user info display
+def send_user_info(user_id):
+    """Send enhanced user account information"""
+    user = user_get(user_id)
+    
+    # Check subscription expiry
+    check_subscription_expiry(user_id)
+    
+    # Format expiry date
+    expiry_text = "No active subscription"
+    if user['expiry_date'] and user['subscription_active']:
+        expiry_date = datetime.datetime.strptime(user['expiry_date'], '%Y-%m-%d %H:%M:%S')
+        expiry_text = expiry_date.strftime('%Y-%m-%d')
+    
+    message = (
+        f"👤 Your Account Info:\n"
+        f"User ID: {user_id}\n"
+        f"Plan: {user['plan'].title()}\n"
+        f"Daily Total Checks: {user['used_today']}/{user['daily_limit']}\n"
+        f"Subscription ends: {expiry_text}"
+    )
+    
+    send_telegram_message(user_id, message)
 
 # REAL TURNITIN AUTOMATION WITH UNDETECTED-CHROMEDRIVER
 def setup_undetected_driver():
@@ -750,7 +830,17 @@ def process_document(submission_id, file_path, options):
         filename = r["filename"]
         is_free_check = r["is_free_check"]
 
+        # Check if user cancelled
+        session = get_user_session(user_id)
+        if session.get('cancel_requested'):
+            update_user_session(user_id, cancel_requested=0)
+            send_telegram_message(user_id, "❌ Processing cancelled by user.")
+            return
+
         send_telegram_message(user_id, "🚀 Starting document analysis...")
+        
+        # Send queue notification for slow processing
+        send_queue_notification(user_id, estimated_minutes=random.randint(5, 10))
 
         # ATTEMPT REAL TURNITIN FIRST
         turnitin_result = attempt_real_turnitin_submission(file_path, filename, options)
@@ -882,8 +972,6 @@ def debug():
     <p><strong>Status:</strong> 🟢 Automatic Fallback & Payments Active</p>
     """
   
-    
-
 @app.route("/payment-success")
 def payment_success():
     """Payment success page - users land here after Paystack payment"""
@@ -895,7 +983,6 @@ def payment_success():
     <p>You can now return to Telegram and use your new features!</p>
     <p><a href="https://t.me/your_bot_username">Return to Telegram</a></p>
     """
-    
     
 @app.route("/test-paystack-webhook", methods=["GET", "POST"])
 def test_paystack_webhook():
@@ -919,7 +1006,6 @@ def test_paystack_webhook():
         "data": request.get_json(silent=True) or str(request.get_data())
     }), 200
       
-
 @app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
 def telegram_webhook(bot_token):
     if request.method == "GET":
@@ -946,8 +1032,16 @@ def telegram_webhook(bot_token):
                     user_data = user_get(user_id)
                     is_free_check = user_data['free_checks_used'] == 0 and user_data['plan'] == 'free'
                     
+                    # Check if user already used free trial
                     if not is_free_check and user_data['free_checks_used'] > 0 and user_data['plan'] == 'free':
-                        send_telegram_message(user_id, "⚠️ Free check used. Upgrade to continue.")
+                        keyboard = create_inline_keyboard([
+                            [("💎 Upgrade Plan", "upgrade_after_free")]
+                        ])
+                        send_telegram_message(
+                            user_id, 
+                            "⚠️ You've already used your free check.\nSubscribe to continue using TurnitQ.",
+                            reply_markup=keyboard
+                        )
                         return "ok", 200
                     
                     if user_data['used_today'] >= user_data['daily_limit']:
@@ -982,19 +1076,30 @@ def telegram_webhook(bot_token):
             if text.startswith("/start"):
                 send_telegram_message(user_id, 
                     "👋 Welcome to TurnitQ!\nAdvanced document analysis with AI detection.\n\n"
-                    "Commands:\n/check - Analyze document\n/id - Account info\n/upgrade - Upgrade plan")
+                    "Commands:\n/check - Analyze document\n/id - Account info\n/upgrade - Upgrade plan\n/cancel - Cancel current check")
             elif text.startswith("/check"):
                 send_telegram_message(user_id, "📄 Upload your document (.pdf or .docx)")
             elif text.startswith("/id"):
-                u = user_get(user_id)
-                send_telegram_message(user_id, f"👤 Plan: {u['plan']}\nUsed today: {u['used_today']}/{u['daily_limit']}")
+                send_user_info(user_id)
             elif text.startswith("/upgrade"):
                 keyboard = create_inline_keyboard([
-                    [("⚡ Premium - $8", "plan_premium")],
-                    [("🚀 Pro - $29", "plan_pro")],
-                    [("👑 Elite - $79", "plan_elite")]
+                    [("⚡ Premium - $8 (₡88)", "plan_premium")],
+                    [("🚀 Pro - $29 (₡319)", "plan_pro")],
+                    [("👑 Elite - $79 (₡869)", "plan_elite")]
                 ])
-                send_telegram_message(user_id, "📊 Choose your plan:", reply_markup=keyboard)
+                send_telegram_message(
+                    user_id, 
+                    "📊 Choose your plan:\n\n"
+                    "⚡ Premium — $8/month, 3 checks per day\n"
+                    "🚀 Pro — $29/month, 20 checks per day\n"
+                    "👑 Elite — $79/month, 70 checks per day",
+                    reply_markup=keyboard
+                )
+            elif text.startswith("/cancel"):
+                if cancel_processing(user_id):
+                    return "ok", 200
+                else:
+                    send_telegram_message(user_id, "❌ No active check to cancel.")
             elif 'document' in message:
                 doc = message['document']
                 filename = doc.get('file_name', f"file_{now_ts()}")
@@ -1017,7 +1122,11 @@ def telegram_webhook(bot_token):
                 )
                 ask_for_report_options(user_id)
             else:
-                send_telegram_message(user_id, "❓ Use /check to analyze a document")
+                # Invalid command
+                send_telegram_message(
+                    user_id,
+                    "⚠️ Please use one of the available commands:\n/check • /cancel • /upgrade • /id"
+                )
 
         elif 'callback_query' in update_data:
             callback = update_data['callback_query']
@@ -1029,35 +1138,37 @@ def telegram_webhook(bot_token):
                 plan_data = PLANS[plan]
                 
                 # Create Paystack payment
-                
-                payment_url,reference = create_paystack_payment(user_id, plan)
-                print(payment_url,reference)
+                payment_url, reference = create_paystack_payment(user_id, plan)
+                print(payment_url, reference)
                 
                 if payment_url:
-                     
                     keyboard1 = {
                         "inline_keyboard": [[
-                            {"text": f"💰 Pay ${plan_data['price']} with Paystack", "url": payment_url}
-                                            ]]
-                            }
+                            {"text": f"💰 Pay ${plan_data['price']} (₡{plan_data['ghana_cedis']})", "url": payment_url}
+                        ]]
+                    }
                     send_telegram_message(
                         user_id,
-                        f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\nClick below to complete your payment:",
+                        f"💳 {plan_data['name']} Plan - ${plan_data['price']} (₡{plan_data['ghana_cedis']})\n\nClick below to complete your payment:",
                         reply_markup=keyboard1
                     )
-
-                     
-
                 else:
                     send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
                     
             elif data == "upgrade_after_free":
                 keyboard = create_inline_keyboard([
-                    [("⚡ Premium - $8", "plan_premium")],
-                    [("🚀 Pro - $29", "plan_pro")],
-                    [("👑 Elite - $79", "plan_elite")]
+                    [("⚡ Premium - $8 (₡88)", "plan_premium")],
+                    [("🚀 Pro - $29 (₡319)", "plan_pro")],
+                    [("👑 Elite - $79 (₡869)", "plan_elite")]
                 ])
-                send_telegram_message(user_id, "📊 Choose your upgrade plan:", reply_markup=keyboard)
+                send_telegram_message(
+                    user_id, 
+                    "📊 Choose your upgrade plan:\n\n"
+                    "⚡ Premium — $8/month, 3 checks per day\n"
+                    "🚀 Pro — $29/month, 20 checks per day\n"
+                    "👑 Elite — $79/month, 70 checks per day",
+                    reply_markup=keyboard
+                )
                 
         return "ok", 200
         
@@ -1065,7 +1176,6 @@ def telegram_webhook(bot_token):
         print(f"❌ Webhook error: {e}")
         return "error", 500
     
-
 @app.route("/paystack-webhook", methods=["POST"])
 def paystack_webhook():
     """Paystack webhook for payment verification"""
@@ -1155,6 +1265,7 @@ def paystack_webhook():
         import traceback
         traceback.print_exc()
         return jsonify({"status": "error"}), 500
+
 # Scheduler
 scheduler = BackgroundScheduler()
 
@@ -1164,7 +1275,15 @@ def reset_daily_usage():
     db.commit()
     print("🔄 Daily usage reset")
 
+def check_all_subscriptions():
+    """Check all user subscriptions for expiry"""
+    cur = db.cursor()
+    users = cur.execute("SELECT user_id FROM users WHERE subscription_active=1").fetchall()
+    for user in users:
+        check_subscription_expiry(user['user_id'])
+
 scheduler.add_job(reset_daily_usage, 'cron', hour=0)
+scheduler.add_job(check_all_subscriptions, 'cron', hour=1)  # Check daily at 1 AM
 scheduler.start()
 
 def setup_webhook():
@@ -1186,4 +1305,4 @@ if __name__ == "__main__":
     setup_webhook()
     port = int(os.environ.get("PORT", 5000))
     print(f"🌐 Server starting on port {port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
