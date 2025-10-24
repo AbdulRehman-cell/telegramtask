@@ -1034,7 +1034,7 @@ def telegram_webhook(bot_token):
                 
                 if payment_url:
                      
-                    keyboard = {
+                    keyboard1 = {
                         "inline_keyboard": [[
                             {"text": f"💰 Pay ${plan_data['price']} with Paystack", "url": payment_url}
                                             ]]
@@ -1042,7 +1042,7 @@ def telegram_webhook(bot_token):
                     send_telegram_message(
                         user_id,
                         f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\nClick below to complete your payment:",
-                        reply_markup=keyboard
+                        reply_markup=keyboard1
                     )
 
                      
