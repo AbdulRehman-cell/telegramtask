@@ -1033,19 +1033,19 @@ def telegram_webhook(bot_token):
                 payment_url = create_paystack_payment(user_id, plan)
                 
                 if payment_url:
-                     payment_message = (
-                    f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\n"
-                    f"Features:\n"
-                    f"• {plan_data['daily_limit']} checks per day\n"
-                    f"• Full similarity reports\n"
-                    f"• AI detection analysis\n"
-                    f"• Priority processing\n\n"
-                    f"Click the link below to complete your payment:\n"
-                    f"<a href=\"{payment_url}\">Pay ${plan_data['price']} with Paystack</a>"
-                    f"After payment, your account will be upgraded automatically!"
+                     
+                    keyboard = {
+                        "inline_keyboard": [[
+                            {"text": f"💰 Pay ${plan_data['price']} with Paystack", "url": payment_url}
+                                            ]]
+                            }
+                    send_telegram_message(
+                        user_id,
+                        f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\nClick below to complete your payment:",
+                        reply_markup=keyboard
                     )
 
-                     send_telegram_message(user_id, payment_message)
+                     
 
                 else:
                     send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
