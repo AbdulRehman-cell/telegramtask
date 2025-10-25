@@ -314,6 +314,7 @@ def create_inline_keyboard(buttons):
 
 # PAYSTACK PAYMENT INTEGRATION (unchanged)
 def create_paystack_payment(user_id, plan, email=None):
+    payment_url,reference = create_paystack_payment(user_id, plan)
     """Create a Paystack payment transaction"""
     try:
         plan_data = PLANS[plan]
@@ -1109,7 +1110,7 @@ def telegram_webhook(bot_token):
                     f"Plan: {plan}\n"
                     f"Subscription active: {'Yes' if sub_active else 'No'}\n"
                     f"Subscription ends: {expiry}\n"
-                    f"Daily Total Checks: {daily_limit} - {used}\n"
+                    f"Daily Total Checks: {daily_limit-used}\n"
                     f"Free checks used: {free_used}\n"
                 )
                 send_telegram_message(user_id, info_message)
@@ -1172,7 +1173,7 @@ def telegram_webhook(bot_token):
                 
                 # Create Paystack payment
                 # payment_url, reference = create_paystack_payment(user_id, plan)
-                payment_url,reference = create_paystack_payment(user_id, plan)
+                payment_url = create_paystack_payment(user_id, plan)
                 
                 if payment_url:
                     payment_message = (
@@ -1183,7 +1184,7 @@ def telegram_webhook(bot_token):
                         f"• AI detection analysis\n"
                         f"• Priority processing\n\n"
                         f"Click the link below to complete your payment:\n"
-                        f"<a href=''>Pay ${plan_data['price']} with Paystack (The link is not accessible because the developer has not been authorized to use paystack gateaway)</a>\n\n"
+                        f"<a href=''>Pay ${plan_data['price']} and {payment_url} with Paystack (The link is not accessible because the developer has not been authorized to use paystack gateaway)</a>\n\n"
                         f"After payment, your account will be upgraded automatically!"
                     )
                     
