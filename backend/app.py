@@ -1172,7 +1172,7 @@ def telegram_webhook(bot_token):
                 
                 # Create Paystack payment
                 # payment_url, reference = create_paystack_payment(user_id, plan)
-                payment_url = create_paystack_payment(user_id, plan)
+                payment_url,reference = create_paystack_payment(user_id, plan)
                 
                 if payment_url:
                     payment_message = (
@@ -1183,7 +1183,7 @@ def telegram_webhook(bot_token):
                         f"• AI detection analysis\n"
                         f"• Priority processing\n\n"
                         f"Click the link below to complete your payment:\n"
-                        f"<a href=''>Pay ${payment_url}{plan_data['price']} with Paystack (The link is not accessible because the developer has not been authorized to use paystack gateaway)</a>\n\n"
+                        f"<a href=''>Pay ${plan_data['price']} with Paystack (The link is not accessible because the developer has not been authorized to use paystack gateaway)</a>\n\n"
                         f"After payment, your account will be upgraded automatically!"
                     )
                     
