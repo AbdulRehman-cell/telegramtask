@@ -130,22 +130,22 @@ if not db.execute("SELECT 1 FROM meta WHERE k='global_alloc'").fetchone():
 PLANS = {
     "premium": {
         "name": "Premium",
-        "daily_limit": 5,
+        "daily_limit": 3,
         "price": 8,
         "duration_days": 28,
         "features": [
-            "Up to 5 checks per day",
+            "Up to 3 checks per day",
             "Full similarity report", 
             "Faster results"
         ]
     },
     "pro": {
         "name": "Pro", 
-        "daily_limit": 30,
+        "daily_limit": 20,
         "price": 29,
         "duration_days": 28,
         "features": [
-            "Up to 30 checks per day",
+            "Up to 20 checks per day",
             "Full similarity report",
             "Faster results", 
             "AI-generated report",
@@ -154,11 +154,11 @@ PLANS = {
     },
     "elite": {
         "name": "Elite",
-        "daily_limit": 100, 
+        "daily_limit": 70, 
         "price": 79,
         "duration_days": 28,
         "features": [
-            "Up to 100 checks per day",
+            "Up to 70 checks per day",
             "Priority processing",
             "Full similarity report",
             "AI-generated report"
@@ -1116,9 +1116,9 @@ def telegram_webhook(bot_token):
                 send_telegram_message(user_id, info_message)
             elif text.startswith("/upgrade"):
                 keyboard = create_inline_keyboard([
-                    [("⚡ Premium - $8", "plan_premium")],
-                    [("🚀 Pro - $29", "plan_pro")],
-                    [("👑 Elite - $79", "plan_elite")]
+                    [("⚡ Upgrade to  Premium - $8", "plan_premium")],
+                    [("🚀 Go Pro - $29", "plan_pro")],
+                    [("👑 Go Elite - $79", "plan_elite")]
                 ])
                 send_telegram_message(user_id, "📊 Choose your plan:", reply_markup=keyboard)
             elif text.startswith("/cancel"):
@@ -1173,30 +1173,36 @@ def telegram_webhook(bot_token):
                 
                 # Create Paystack payment
                 # payment_url, reference = create_paystack_payment(user_id, plan)
-                payment_url = create_paystack_payment(user_id, plan)
+                payment_url,reference = create_paystack_payment(user_id, plan)
+                
+                payment_message = (
+                    f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\n"
+                    f"Features:\n" +
+                    "\n".join(f"• {feature}" for feature in plan_data["features"]) +
+                    f"\n\nClick the link below to complete your payment:\n"
+                    f"{plan_data['payment_url']}"
+                )
+ 
+                
+                send_telegram_message(user_id, payment_message)   
+                    
                 
                 if payment_url:
-                    payment_message = (
-                        f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\n"
-                        f"Features:\n"
-                        f"• {plan_data['daily_limit']} checks per day\n"
-                        f"• Full similarity reports\n"
-                        f"• AI detection analysis\n"
-                        f"• Priority processing\n\n"
-                        f"Click the link below to complete your payment:\n"
-                        f"<a href=''>Pay ${plan_data['price']} and {payment_url} with Paystack (The link is not accessible because the developer has not been authorized to use paystack gateaway)</a>\n\n"
+                    payment_message1 = (
+                        
+                        f"<a href='#'>Pay ${plan_data['price']} and {payment_url} with Paystack (The link is not accessible because the developer has not been authorized to use paystack gateaway)</a>\n\n"
                         f"After payment, your account will be upgraded automatically!"
-                    )
+                        )
                     
-                    send_telegram_message(user_id, payment_message)
+                    send_telegram_message(user_id, payment_message1)
                 else:
                     send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
                     
             elif data == "upgrade_after_free":
                 keyboard = create_inline_keyboard([
-                    [("⚡ Premium - $8", "plan_premium")],
-                    [("🚀 Pro - $29", "plan_pro")],
-                    [("👑 Elite - $79", "plan_elite")]
+                    [("⚡ Upgrade to Premium - $8", "plan_premium")],
+                    [("🚀 Go Pro - $29", "plan_pro")],
+                    [("👑 Go Elite - $79", "plan_elite")]
                 ])
                 send_telegram_message(user_id, "📊 Choose your upgrade plan:", reply_markup=keyboard)
                 
