@@ -929,7 +929,7 @@ def debug():
     <p><strong>Successful Payments:</strong> {payment_count}</p>
     <p><strong>Status:</strong> 🟢 Automatic Fallback & Payments Active</p>
     """
-
+#hello
 @app.route("/payment-success")
 def payment_success():
     """Enhanced success page that explains automatic activation"""
