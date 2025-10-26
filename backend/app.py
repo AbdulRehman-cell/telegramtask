@@ -1082,7 +1082,6 @@ def paystack_webhook():
         event = data.get('event')
         
         print(f"📨 Received Paystack webhook: {event}")
-        print(f"📦 Full webhook data: {json.dumps(data, indent=2)}")
         
         if event == 'charge.success':
             payment_data = data.get('data', {})
@@ -1101,34 +1100,24 @@ def paystack_webhook():
             user_id = None
             plan = None
             
-            # Method 1: From custom fields (payment page) - PRIMARY METHOD
-            for field in custom_fields:
-                field_name = field.get('variable_name', '')
-                field_value = field.get('value', '')
-                print(f"🔍 Checking custom field: '{field_name}' = '{field_value}'")
-                
-                # Exact match for "Telegram Id" (case sensitive as per your setup)
-                if field_name == 'Telegram Id':
-                    user_id = field_value
-                    print(f"✅ Found Telegram ID in custom field: {user_id}")
+            # Method 1: From metadata (most reliable)
+            user_id = metadata.get('telegram_id') or metadata.get('telegram_user_id') or metadata.get('user_id')
+            if user_id:
+                print(f"✅ Found Telegram ID in metadata: {user_id}")
             
-            # Method 2: Check authorization for additional data
-            authorization = payment_data.get('authorization', {})
+            # Method 2: From custom fields
             if not user_id:
-                user_id = authorization.get('telegram_id')
-                if user_id:
-                    print(f"✅ Found Telegram ID in authorization: {user_id}")
+                for field in custom_fields:
+                    field_name = field.get('variable_name', '')
+                    field_value = field.get('value', '')
+                    print(f"🔍 Checking custom field: '{field_name}' = '{field_value}'")
+                    
+                    if field_name == 'Telegram Id':
+                        user_id = field_value
+                        print(f"✅ Found Telegram ID in custom field: {user_id}")
+                        break
             
-            # Method 3: From metadata (fallback)
-            if not user_id:
-                user_id = (metadata.get('telegram_user_id') or 
-                          metadata.get('telegram_id') or 
-                          metadata.get('telegramid') or
-                          metadata.get('user_id'))
-                if user_id:
-                    print(f"✅ Found Telegram ID in metadata: {user_id}")
-            
-            # Method 4: From customer email (fallback)
+            # Method 3: From customer email
             if not user_id and customer_email:
                 print(f"🔍 Checking email for Telegram ID: {customer_email}")
                 if customer_email.startswith('user') and '@turnitq.com' in customer_email:
@@ -1138,41 +1127,30 @@ def paystack_webhook():
                     except:
                         pass
             
-            # Method 5: From reference (fallback)
+            # Method 4: From reference (your current URL approach)
             if not user_id and reference:
                 print(f"🔍 Checking reference for Telegram ID: {reference}")
+                # Check if reference contains telegram pattern
                 if 'telegram_' in reference:
                     try:
-                        user_id = int(reference.split('telegram_')[-1].split('_')[0])
+                        user_id = int(reference.split('telegram_')[-1])
                         print(f"✅ Extracted Telegram ID from reference: {user_id}")
                     except:
                         pass
             
-            # PLAN DETECTION - Since you're using GHS, we need to handle currency conversion
-            # Your page amount is GHS 90, which should be Premium plan ($8 ≈ GHS 90)
-            print(f"🔍 Determining plan from amount: ${amount} (Original: {payment_data.get('amount')} kobo)")
+            # PLAN DETECTION
+            print(f"🔍 Determining plan from amount: ${amount}")
             
-            # Convert GHS to USD for plan detection (approximate conversion rate)
-            # GHS 90 ≈ $8 (Premium), GHS 320 ≈ $29 (Pro), GHS 870 ≈ $79 (Elite)
-            ghs_to_usd_rate = 0.089  # Approximate conversion rate
-            amount_usd = amount * ghs_to_usd_rate
+            # Handle GHS currency conversion
+            amount_usd = amount * 0.089  # GHS to USD conversion rate
             
-            print(f"🔍 Amount in USD (approx): ${amount_usd:.2f}")
-            
-            # Find the closest plan based on USD amount
-            plan_candidates = []
+            # Find closest matching plan
             for plan_name, plan_data in PLANS.items():
                 expected_usd = plan_data['price']
-                difference = abs(amount_usd - expected_usd)
-                plan_candidates.append((plan_name, difference))
-            
-            # Sort by smallest difference and take the best match
-            if plan_candidates:
-                plan_candidates.sort(key=lambda x: x[1])
-                best_plan, difference = plan_candidates[0]
-                if difference <= 5:  # Allow $5 difference for currency fluctuations
-                    plan = best_plan
-                    print(f"✅ Determined plan from amount: {plan} (difference: ${difference:.2f})")
+                if abs(amount_usd - expected_usd) <= 5:  # Allow $5 difference
+                    plan = plan_name
+                    print(f"✅ Determined plan from amount: {plan} (${amount_usd:.2f} ≈ ${expected_usd})")
+                    break
             
             print(f"🔍 Final Extraction - User ID: {user_id}, Plan: {plan}")
             
@@ -1180,9 +1158,9 @@ def paystack_webhook():
                 try:
                     # Clean and convert user_id
                     if isinstance(user_id, str):
-                        # Remove any non-numeric characters except minus (for negative IDs)
-                        user_id = ''.join(filter(lambda x: x.isdigit() or x == '-', user_id))
-                        if user_id and user_id != '-':
+                        # Remove any non-numeric characters
+                        user_id = ''.join(filter(str.isdigit, user_id))
+                        if user_id:
                             user_id = int(user_id)
                         else:
                             print(f"❌ Invalid user_id format: {user_id}")
@@ -1194,6 +1172,23 @@ def paystack_webhook():
                     if plan not in PLANS:
                         print(f"❌ Invalid plan: {plan}")
                         return jsonify({"status": "error", "message": "Invalid plan"}), 400
+                    
+                    # Check if user already has this plan active
+                    user = user_get(user_id)
+                    if user and user['plan'] == plan and user['subscription_active']:
+                        print(f"ℹ️ User {user_id} already has active {plan} plan")
+                        # Still send confirmation message
+                        plan_data = PLANS[plan]
+                        success_message = (
+                            f"🎉 Payment Verified!\n\n"
+                            f"✅ Your {plan_data['name']} plan is already active!\n"
+                            f"📅 Expires: {user['expiry_date']}\n"
+                            f"🔓 Daily checks: {plan_data['daily_limit']}\n"
+                            f"💰 Amount: {amount} GHS\n\n"
+                            f"Thank you for your continued support!"
+                        )
+                        send_telegram_message(user_id, success_message)
+                        return jsonify({"status": "already_active"}), 200
                     
                     # ACTIVATE SUBSCRIPTION AUTOMATICALLY
                     expiry_date = activate_user_subscription(user_id, plan)
