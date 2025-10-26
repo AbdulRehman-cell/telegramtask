@@ -328,10 +328,9 @@ def get_payment_page_url(plan, user_id):
     
     base_url = payment_pages.get(plan)
     if base_url:
-        # Add Telegram ID as parameter - ensure it's properly formatted
-        return f"{base_url}?custom_field=telegram_{user_id}"
+        # Use metadata parameter which is more reliable
+        return f"{base_url}?metadata[telegram_id]={user_id}"
     return None
-
 def handle_payment_selection(user_id, plan):
     """Handle payment selection with automatic activation setup"""
     plan_data = PLANS[plan]
