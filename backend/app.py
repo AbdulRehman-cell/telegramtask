@@ -321,9 +321,9 @@ def create_inline_keyboard(buttons):
 def get_payment_page_url(plan):
     """Get Paystack payment page URLs for each plan"""
     payment_pages = {
-        "premium": "https://paystack.com/pay/turnitq-premium",
-        "pro": "https://paystack.com/pay/turnitq-pro", 
-        "elite": "https://paystack.com/pay/turnitq-elite"
+        "premium": "https://paystack.shop/pay/premiumpage",
+        "pro": "https://paystack.shop/pay/propage", 
+        "elite": "https://paystack.shop/pay/elitepage"
     }
     return payment_pages.get(plan)
 
