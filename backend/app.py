@@ -1055,7 +1055,6 @@ def manual_activation():
             
     except Exception as e:
         return f"<h2>Error</h2><p>{str(e)}</p>"
-
 @app.route("/paystack-webhook", methods=["POST"])
 def paystack_webhook():
     """Paystack webhook for automatic payment verification and activation"""
@@ -1092,44 +1091,91 @@ def paystack_webhook():
             custom_fields = payment_data.get('custom_fields', [])
             
             print(f"💰 Payment successful - Reference: {reference}, Amount: ${amount}")
+            print(f"📧 Customer Email: {customer_email}")
+            print(f"🔧 Custom Fields: {custom_fields}")
+            print(f"📋 Metadata: {metadata}")
             
             # Extract user info from multiple sources
             user_id = None
             plan = None
             
-            # Method 1: From custom fields (payment page)
+            # Method 1: From custom fields (payment page) - PRIMARY METHOD
             for field in custom_fields:
-                if field.get('variable_name') == 'telegram_user_id':
-                    user_id = field.get('value')
-                elif field.get('variable_name') == 'plan_type':
-                    plan = field.get('value')
+                field_name = field.get('variable_name', '').lower()
+                field_value = field.get('value', '')
+                print(f"🔍 Checking custom field: {field_name} = {field_value}")
+                
+                if field_name in ['Telegram Id', 'user_id', 'userid']:
+                    user_id = field_value
+                    print(f"✅ Found Telegram ID in custom field: {user_id}")
+                elif field_name in ['plan', 'plan_type', 'plantype']:
+                    plan = field_value
+                    print(f"✅ Found plan in custom field: {plan}")
             
-            # Method 2: From metadata
+            # Method 2: From metadata (fallback)
             if not user_id:
-                user_id = metadata.get('telegram_user_id') or metadata.get('telegram_id')
+                user_id = (metadata.get('Telegram Id')) 
+                if user_id:
+                    print(f"✅ Found Telegram ID in metadata: {user_id}")
+            
             if not plan:
                 plan = metadata.get('plan') or metadata.get('plan_type')
+                if plan:
+                    print(f"✅ Found plan in metadata: {plan}")
             
-            # Method 3: From customer email
+            # Method 3: From customer email (fallback)
             if not user_id and customer_email:
+                print(f"🔍 Checking email for Telegram ID: {customer_email}")
                 if customer_email.startswith('user') and '@turnitq.com' in customer_email:
                     try:
                         user_id = int(customer_email.replace('user', '').replace('@turnitq.com', ''))
+                        print(f"✅ Extracted Telegram ID from email: {user_id}")
                     except:
                         pass
             
-            # Method 4: From reference
+            # Method 4: From reference (fallback)
             if not user_id and reference:
+                print(f"🔍 Checking reference for Telegram ID: {reference}")
                 if 'telegram_' in reference:
                     try:
                         user_id = int(reference.split('telegram_')[-1].split('_')[0])
+                        print(f"✅ Extracted Telegram ID from reference: {user_id}")
+                    except:
+                        pass
+                elif 'user' in reference:
+                    try:
+                        # Try to extract from patterns like "user12345_plan"
+                        import re
+                        match = re.search(r'user(\d+)', reference)
+                        if match:
+                            user_id = int(match.group(1))
+                            print(f"✅ Extracted Telegram ID from reference pattern: {user_id}")
                     except:
                         pass
             
-            print(f"🔍 Extracted - User ID: {user_id}, Plan: {plan}")
-            #good
+            # Method 5: If plan is still not found, try to determine from amount
+            if not plan:
+                print(f"🔍 Determining plan from amount: ${amount}")
+                for plan_name, plan_data in PLANS.items():
+                    if abs(amount - plan_data['price']) <= 2:  # Allow $2 difference
+                        plan = plan_name
+                        print(f"✅ Determined plan from amount: {plan}")
+                        break
+            
+            print(f"🔍 Final Extraction - User ID: {user_id}, Plan: {plan}")
+            
             if user_id and plan:
                 try:
+                    # Clean and convert user_id
+                    if isinstance(user_id, str):
+                        # Remove any non-numeric characters except minus (for negative IDs)
+                        user_id = ''.join(filter(lambda x: x.isdigit() or x == '-', user_id))
+                        if user_id and user_id != '-':
+                            user_id = int(user_id)
+                        else:
+                            print(f"❌ Invalid user_id format: {user_id}")
+                            return jsonify({"status": "invalid_user_id"}), 400
+                    
                     user_id = int(user_id)
                     
                     # Verify this is a valid plan
@@ -1149,6 +1195,16 @@ def paystack_webhook():
                     user = user_get(user_id)
                     if user and user['plan'] == plan and user['subscription_active']:
                         print(f"ℹ️ User {user_id} already has active {plan} plan")
+                        # Still send confirmation message
+                        success_message = (
+                            f"🎉 Payment Verified!\n\n"
+                            f"✅ Your {plan_data['name']} plan is already active!\n"
+                            f"📅 Expires: {user['expiry_date']}\n"
+                            f"🔓 Daily checks: {plan_data['daily_limit']}\n"
+                            f"💰 Amount: ${amount}\n\n"
+                            f"Thank you for your continued support!"
+                        )
+                        send_telegram_message(user_id, success_message)
                         return jsonify({"status": "already_active"}), 200
                     
                     # ACTIVATE SUBSCRIPTION AUTOMATICALLY
@@ -1183,6 +1239,15 @@ def paystack_webhook():
                         }), 200
                     else:
                         print(f"❌ Failed to activate subscription for user {user_id}")
+                        # Notify user about activation failure
+                        error_message = (
+                            f"❌ Payment received but activation failed!\n\n"
+                            f"💰 Amount: ${amount}\n"
+                            f"📋 Reference: {reference}\n\n"
+                            f"Please contact support with your payment details."
+                        )
+                        if user_id:
+                            send_telegram_message(user_id, error_message)
                         return jsonify({"status": "activation_failed"}), 500
                         
                 except (ValueError, TypeError) as e:
@@ -1193,11 +1258,44 @@ def paystack_webhook():
                 print(f"User ID: {user_id}, Plan: {plan}")
                 print(f"Custom fields: {custom_fields}")
                 print(f"Metadata: {metadata}")
+                print(f"Customer email: {customer_email}")
+                print(f"Reference: {reference}")
+                
+                # Store failed payment for manual review
+                if reference:
+                    cur = db.cursor()
+                    cur.execute(
+                        "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (None, plan, amount, reference, 'missing_data', now_ts(), now_ts())
+                    )
+                    db.commit()
+                
                 return jsonify({"status": "missing_data"}), 400
         
         elif event == 'charge.failed':
             print(f"❌ Payment failed: {data}")
-            # You could notify the user here if you have their ID
+            # Extract user_id to notify about failed payment
+            payment_data = data.get('data', {})
+            reference = payment_data.get('reference')
+            customer_email = payment_data.get('customer', {}).get('email', '')
+            
+            # Try to extract user_id from reference or email for notification
+            user_id = None
+            if reference and 'telegram_' in reference:
+                try:
+                    user_id = int(reference.split('telegram_')[-1].split('_')[0])
+                except:
+                    pass
+            
+            if user_id:
+                error_message = (
+                    f"❌ Payment Failed\n\n"
+                    f"Your payment was not successful.\n"
+                    f"Reference: {reference}\n\n"
+                    f"Please try again or contact support."
+                )
+                send_telegram_message(user_id, error_message)
+            
             return jsonify({"status": "payment_failed"}), 200
             
         else:
@@ -1208,9 +1306,7 @@ def paystack_webhook():
         print(f"❌ Paystack webhook error: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({"status": "error"}), 500
-
-@app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
+        return jsonify({"status": "error"}), 500@app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
 def telegram_webhook(bot_token):
     if request.method == "GET":
         return "🤖 Webhook active! Send POST requests."
