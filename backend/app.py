@@ -1082,6 +1082,7 @@ def paystack_webhook():
         event = data.get('event')
         
         print(f"📨 Received Paystack webhook: {event}")
+        print(f"📦 Full webhook data: {json.dumps(data, indent=2)}")
         
         if event == 'charge.success':
             payment_data = data.get('data', {})
@@ -1110,13 +1111,15 @@ def paystack_webhook():
                 if field_name == 'Telegram Id':
                     user_id = field_value
                     print(f"✅ Found Telegram ID in custom field: {user_id}")
-                
-                # Also check for plan field
-                if field_name.lower() in ['plan', 'plan_type', 'plantype']:
-                    plan = field_value
-                    print(f"✅ Found plan in custom field: {plan}")
             
-            # Method 2: From metadata (fallback)
+            # Method 2: Check authorization for additional data
+            authorization = payment_data.get('authorization', {})
+            if not user_id:
+                user_id = authorization.get('telegram_id')
+                if user_id:
+                    print(f"✅ Found Telegram ID in authorization: {user_id}")
+            
+            # Method 3: From metadata (fallback)
             if not user_id:
                 user_id = (metadata.get('telegram_user_id') or 
                           metadata.get('telegram_id') or 
@@ -1125,12 +1128,7 @@ def paystack_webhook():
                 if user_id:
                     print(f"✅ Found Telegram ID in metadata: {user_id}")
             
-            if not plan:
-                plan = metadata.get('plan') or metadata.get('plan_type')
-                if plan:
-                    print(f"✅ Found plan in metadata: {plan}")
-            
-            # Method 3: From customer email (fallback)
+            # Method 4: From customer email (fallback)
             if not user_id and customer_email:
                 print(f"🔍 Checking email for Telegram ID: {customer_email}")
                 if customer_email.startswith('user') and '@turnitq.com' in customer_email:
@@ -1140,7 +1138,7 @@ def paystack_webhook():
                     except:
                         pass
             
-            # Method 4: From reference (fallback)
+            # Method 5: From reference (fallback)
             if not user_id and reference:
                 print(f"🔍 Checking reference for Telegram ID: {reference}")
                 if 'telegram_' in reference:
@@ -1150,14 +1148,31 @@ def paystack_webhook():
                     except:
                         pass
             
-            # Method 5: If plan is still not found, try to determine from amount
-            if not plan:
-                print(f"🔍 Determining plan from amount: ${amount}")
-                for plan_name, plan_data in PLANS.items():
-                    if abs(amount - plan_data['price']) <= 2:  # Allow $2 difference
-                        plan = plan_name
-                        print(f"✅ Determined plan from amount: {plan}")
-                        break
+            # PLAN DETECTION - Since you're using GHS, we need to handle currency conversion
+            # Your page amount is GHS 90, which should be Premium plan ($8 ≈ GHS 90)
+            print(f"🔍 Determining plan from amount: ${amount} (Original: {payment_data.get('amount')} kobo)")
+            
+            # Convert GHS to USD for plan detection (approximate conversion rate)
+            # GHS 90 ≈ $8 (Premium), GHS 320 ≈ $29 (Pro), GHS 870 ≈ $79 (Elite)
+            ghs_to_usd_rate = 0.089  # Approximate conversion rate
+            amount_usd = amount * ghs_to_usd_rate
+            
+            print(f"🔍 Amount in USD (approx): ${amount_usd:.2f}")
+            
+            # Find the closest plan based on USD amount
+            plan_candidates = []
+            for plan_name, plan_data in PLANS.items():
+                expected_usd = plan_data['price']
+                difference = abs(amount_usd - expected_usd)
+                plan_candidates.append((plan_name, difference))
+            
+            # Sort by smallest difference and take the best match
+            if plan_candidates:
+                plan_candidates.sort(key=lambda x: x[1])
+                best_plan, difference = plan_candidates[0]
+                if difference <= 5:  # Allow $5 difference for currency fluctuations
+                    plan = best_plan
+                    print(f"✅ Determined plan from amount: {plan} (difference: ${difference:.2f})")
             
             print(f"🔍 Final Extraction - User ID: {user_id}, Plan: {plan}")
             
@@ -1180,30 +1195,6 @@ def paystack_webhook():
                         print(f"❌ Invalid plan: {plan}")
                         return jsonify({"status": "error", "message": "Invalid plan"}), 400
                     
-                    # Verify payment amount matches plan price (allow small differences for currency conversion)
-                    plan_data = PLANS[plan]
-                    expected_amount = plan_data['price']
-                    
-                    if abs(amount - expected_amount) > 2:  # Allow $2 difference
-                        print(f"⚠️ Amount mismatch: paid ${amount}, expected ${expected_amount}")
-                        # Continue anyway as amount might be in different currency
-                    
-                    # Check if user already has this plan active
-                    user = user_get(user_id)
-                    if user and user['plan'] == plan and user['subscription_active']:
-                        print(f"ℹ️ User {user_id} already has active {plan} plan")
-                        # Still send confirmation message
-                        success_message = (
-                            f"🎉 Payment Verified!\n\n"
-                            f"✅ Your {plan_data['name']} plan is already active!\n"
-                            f"📅 Expires: {user['expiry_date']}\n"
-                            f"🔓 Daily checks: {plan_data['daily_limit']}\n"
-                            f"💰 Amount: ${amount}\n\n"
-                            f"Thank you for your continued support!"
-                        )
-                        send_telegram_message(user_id, success_message)
-                        return jsonify({"status": "already_active"}), 200
-                    
                     # ACTIVATE SUBSCRIPTION AUTOMATICALLY
                     expiry_date = activate_user_subscription(user_id, plan)
                     if expiry_date:
@@ -1216,12 +1207,13 @@ def paystack_webhook():
                         db.commit()
                         
                         # Send automatic confirmation to user
+                        plan_data = PLANS[plan]
                         success_message = (
                             f"🎉 Payment Verified & Activated!\n\n"
                             f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
                             f"📅 Expires: {expiry_date}\n"
                             f"🔓 Daily checks: {plan_data['daily_limit']}\n"
-                            f"💰 Amount: ${amount}\n\n"
+                            f"💰 Amount: {amount} GHS\n\n"
                             f"🚀 You can now use all premium features immediately!\n"
                             f"📄 Upload a document to get started."
                         )
@@ -1239,7 +1231,7 @@ def paystack_webhook():
                         # Notify user about activation failure
                         error_message = (
                             f"❌ Payment received but activation failed!\n\n"
-                            f"💰 Amount: ${amount}\n"
+                            f"💰 Amount: {amount} GHS\n"
                             f"📋 Reference: {reference}\n\n"
                             f"Please contact support with your payment details."
                         )
@@ -1271,38 +1263,6 @@ def paystack_webhook():
         
         elif event == 'charge.failed':
             print(f"❌ Payment failed: {data}")
-            # Extract user_id to notify about failed payment
-            payment_data = data.get('data', {})
-            reference = payment_data.get('reference')
-            custom_fields = payment_data.get('custom_fields', [])
-            
-            # Try to extract user_id from custom fields first
-            user_id = None
-            for field in custom_fields:
-                if field.get('variable_name') == 'Telegram Id':
-                    user_id = field.get('value')
-                    break
-            
-            # If not found in custom fields, try from reference
-            if not user_id and reference and 'telegram_' in reference:
-                try:
-                    user_id = int(reference.split('telegram_')[-1].split('_')[0])
-                except:
-                    pass
-            
-            if user_id:
-                try:
-                    user_id = int(user_id)
-                    error_message = (
-                        f"❌ Payment Failed\n\n"
-                        f"Your payment was not successful.\n"
-                        f"Reference: {reference}\n\n"
-                        f"Please try again or contact support."
-                    )
-                    send_telegram_message(user_id, error_message)
-                except:
-                    pass
-            
             return jsonify({"status": "payment_failed"}), 200
             
         else:
