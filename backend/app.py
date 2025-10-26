@@ -317,9 +317,9 @@ def create_inline_keyboard(buttons):
         keyboard.append(row)
     return {"inline_keyboard": keyboard}
 
-# PAYSTACK PAYMENT PAGE INTEGRATION
+# PAYSTACK PAYMENT PAGE INTEGRATION - FIXED
 def get_payment_page_url(plan, user_id):
-    """Get Paystack payment page URLs with Telegram ID embedded"""
+    """Get Paystack payment page URLs with Telegram ID properly embedded"""
     payment_pages = {
         "premium": "https://paystack.shop/pay/premiumpage",
         "pro": "https://paystack.shop/pay/propage", 
@@ -328,8 +328,8 @@ def get_payment_page_url(plan, user_id):
     
     base_url = payment_pages.get(plan)
     if base_url:
-        # Add Telegram ID as parameter
-        return f"{base_url}?c=telegram_{user_id}"
+        # Add Telegram ID as parameter - ensure it's properly formatted
+        return f"{base_url}?custom_field=telegram_{user_id}"
     return None
 
 def handle_payment_selection(user_id, plan):
@@ -344,7 +344,8 @@ def handle_payment_selection(user_id, plan):
         keyboard = {
             "inline_keyboard": [
                 [{"text": f"💰 Pay ${plan_data['price']}", "url": payment_url}],
-                [{"text": "📋 Plan Features", "callback_data": f"plan_details_{plan}"}]
+                [{"text": "📋 Plan Features", "callback_data": f"plan_details_{plan}"}],
+                [{"text": "🔄 Refresh Status", "callback_data": f"refresh_payment_{user_id}_{plan}"}]
             ]
         }
         
@@ -1401,6 +1402,22 @@ def telegram_webhook(bot_token):
                     [("👑 Elite - $79", "plan_elite")]
                 ])
                 send_telegram_message(user_id, "📊 Choose your upgrade plan:", reply_markup=keyboard)
+                
+            elif data.startswith("refresh_payment_"):
+                # Handle payment status refresh
+                parts = data.split('_')
+                if len(parts) >= 4:
+                    refresh_user_id = parts[2]
+                    refresh_plan = parts[3]
+                    try:
+                        refresh_user_id = int(refresh_user_id)
+                        user_data = user_get(refresh_user_id)
+                        if user_data and user_data['plan'] == refresh_plan and user_data['subscription_active']:
+                            send_telegram_message(user_id, "✅ Your subscription is active! You can now use premium features.")
+                        else:
+                            send_telegram_message(user_id, "⏳ Payment still processing. Please wait a moment and try again.")
+                    except:
+                        send_telegram_message(user_id, "❌ Error checking status. Please contact support.")
                 
         return "ok", 200
         
