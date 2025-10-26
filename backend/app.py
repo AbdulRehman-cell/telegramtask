@@ -1055,6 +1055,7 @@ def manual_activation():
             
     except Exception as e:
         return f"<h2>Error</h2><p>{str(e)}</p>"
+
 @app.route("/paystack-webhook", methods=["POST"])
 def paystack_webhook():
     """Paystack webhook for automatic payment verification and activation"""
@@ -1101,20 +1102,26 @@ def paystack_webhook():
             
             # Method 1: From custom fields (payment page) - PRIMARY METHOD
             for field in custom_fields:
-                field_name = field.get('variable_name', '').lower()
+                field_name = field.get('variable_name', '')
                 field_value = field.get('value', '')
-                print(f"🔍 Checking custom field: {field_name} = {field_value}")
+                print(f"🔍 Checking custom field: '{field_name}' = '{field_value}'")
                 
-                if field_name in ['Telegram Id', 'user_id', 'userid']:
+                # Exact match for "Telegram Id" (case sensitive as per your setup)
+                if field_name == 'Telegram Id':
                     user_id = field_value
                     print(f"✅ Found Telegram ID in custom field: {user_id}")
-                elif field_name in ['plan', 'plan_type', 'plantype']:
+                
+                # Also check for plan field
+                if field_name.lower() in ['plan', 'plan_type', 'plantype']:
                     plan = field_value
                     print(f"✅ Found plan in custom field: {plan}")
             
             # Method 2: From metadata (fallback)
             if not user_id:
-                user_id = (metadata.get('Telegram Id')) 
+                user_id = (metadata.get('telegram_user_id') or 
+                          metadata.get('telegram_id') or 
+                          metadata.get('telegramid') or
+                          metadata.get('user_id'))
                 if user_id:
                     print(f"✅ Found Telegram ID in metadata: {user_id}")
             
@@ -1140,16 +1147,6 @@ def paystack_webhook():
                     try:
                         user_id = int(reference.split('telegram_')[-1].split('_')[0])
                         print(f"✅ Extracted Telegram ID from reference: {user_id}")
-                    except:
-                        pass
-                elif 'user' in reference:
-                    try:
-                        # Try to extract from patterns like "user12345_plan"
-                        import re
-                        match = re.search(r'user(\d+)', reference)
-                        if match:
-                            user_id = int(match.group(1))
-                            print(f"✅ Extracted Telegram ID from reference pattern: {user_id}")
                     except:
                         pass
             
@@ -1277,24 +1274,34 @@ def paystack_webhook():
             # Extract user_id to notify about failed payment
             payment_data = data.get('data', {})
             reference = payment_data.get('reference')
-            customer_email = payment_data.get('customer', {}).get('email', '')
+            custom_fields = payment_data.get('custom_fields', [])
             
-            # Try to extract user_id from reference or email for notification
+            # Try to extract user_id from custom fields first
             user_id = None
-            if reference and 'telegram_' in reference:
+            for field in custom_fields:
+                if field.get('variable_name') == 'Telegram Id':
+                    user_id = field.get('value')
+                    break
+            
+            # If not found in custom fields, try from reference
+            if not user_id and reference and 'telegram_' in reference:
                 try:
                     user_id = int(reference.split('telegram_')[-1].split('_')[0])
                 except:
                     pass
             
             if user_id:
-                error_message = (
-                    f"❌ Payment Failed\n\n"
-                    f"Your payment was not successful.\n"
-                    f"Reference: {reference}\n\n"
-                    f"Please try again or contact support."
-                )
-                send_telegram_message(user_id, error_message)
+                try:
+                    user_id = int(user_id)
+                    error_message = (
+                        f"❌ Payment Failed\n\n"
+                        f"Your payment was not successful.\n"
+                        f"Reference: {reference}\n\n"
+                        f"Please try again or contact support."
+                    )
+                    send_telegram_message(user_id, error_message)
+                except:
+                    pass
             
             return jsonify({"status": "payment_failed"}), 200
             
@@ -1306,7 +1313,9 @@ def paystack_webhook():
         print(f"❌ Paystack webhook error: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({"status": "error"}), 500@app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
+        return jsonify({"status": "error"}), 500
+    
+@app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
 def telegram_webhook(bot_token):
     if request.method == "GET":
         return "🤖 Webhook active! Send POST requests."
