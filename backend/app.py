@@ -319,18 +319,47 @@ def create_inline_keyboard(buttons):
 
 # PAYSTACK PAYMENT PAGE INTEGRATION - FIXED
 def get_payment_page_url(plan, user_id):
-    """Get Paystack payment page URLs with Telegram ID properly embedded"""
-    payment_pages = {
-        "premium": "https://paystack.shop/pay/premiumpage",
-        "pro": "https://paystack.shop/pay/propage", 
-        "elite": "https://paystack.shop/pay/elitepage"
-    }
-    
-    base_url = payment_pages.get(plan)
-    if base_url:
-        # Use metadata parameter which is reliably passed to webhooks
-        return f"{base_url}?metadata[telegram_id]={user_id}"
-    return None
+    """Create Paystack payment page URLs with Telegram ID using API"""
+    try:
+        plan_data = PLANS[plan]
+        
+        # Create payment request using Paystack API
+        url = "https://api.paystack.co/page"
+        headers = {
+            "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "name": f"{plan_data['name']} Plan - User {user_id}",
+            "description": f"TurnitQ {plan_data['name']} Subscription",
+            "amount": plan_data['price'] * 100,  # Convert to kobo
+            "currency": "GHS",  # Use GHS since your page is in Ghana Cedis
+            "metadata": {
+                "telegram_id": user_id,
+                "plan": plan
+            }
+        }
+        
+        response = requests.post(url, json=payload, headers=headers)
+        result = response.json()
+        
+        if result.get('status') and result['data'].get('slug'):
+            slug = result['data']['slug']
+            return f"https://paystack.shop/pay/{slug}"
+        else:
+            print(f"❌ Failed to create payment page: {result}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error creating payment page: {e}")
+        # Fallback to static pages
+        payment_pages = {
+            "premium": "https://paystack.shop/pay/premiumpage",
+            "pro": "https://paystack.shop/pay/propage", 
+            "elite": "https://paystack.shop/pay/elitepage"
+        }
+        return payment_pages.get(plan)
 def handle_payment_selection(user_id, plan):
     """Handle payment selection with automatic activation setup"""
     plan_data = PLANS[plan]
