@@ -328,7 +328,7 @@ def get_payment_page_url(plan, user_id):
     
     base_url = payment_pages.get(plan)
     if base_url:
-        # Use metadata parameter which is more reliable
+        # Use metadata parameter which is reliably passed to webhooks
         return f"{base_url}?metadata[telegram_id]={user_id}"
     return None
 def handle_payment_selection(user_id, plan):
@@ -357,14 +357,13 @@ def handle_payment_selection(user_id, plan):
             f"• Your subscription activates INSTANTLY\n"
             f"• No manual steps required\n\n"
             f"🔑 Your Telegram ID: <code>{user_id}</code>\n"
-            f"📧 Use email: user{user_id}@turnitq.com if asked\n\n"
+            f"📝 Important: Your Telegram ID is automatically included in the payment\n\n"
             f"Click below to start:"
         )
         
         send_telegram_message(user_id, payment_message, reply_markup=keyboard)
     else:
         send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
-
 def activate_user_subscription(user_id, plan):
     """Activate user's subscription after successful payment"""
     try:
