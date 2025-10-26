@@ -1,4 +1,3 @@
-# turnitq_bot.py
 import os
 import time
 import json
@@ -305,117 +304,61 @@ def create_inline_keyboard(buttons):
     for button_row in buttons:
         row = []
         for button in button_row:
-            row.append({
-                "text": button[0],
-                "callback_data": button[1]
-            })
+            if len(button) == 3 and button[2] == "url":
+                row.append({
+                    "text": button[0],
+                    "url": button[1]
+                })
+            else:
+                row.append({
+                    "text": button[0],
+                    "callback_data": button[1]
+                })
         keyboard.append(row)
     return {"inline_keyboard": keyboard}
 
-# PAYSTACK PAYMENT INTEGRATION (unchanged)
-def create_paystack_payment(user_id, plan, email=None):
-    payment_url,reference = create_paystack_payment(user_id, plan)
-    """Create a Paystack payment transaction"""
-    try:
-        plan_data = PLANS[plan]
-        amount = int(plan_data['price'] * 100)  # Convert to kobo/cents
-        
-        # Generate unique reference
-        reference = f"TURNITQ_{user_id}_{now_ts()}"
-        
-        # Prepare payment data
-        payment_data = {
-            "amount": amount,
-            "email": email or f"user{user_id}@turnitq.com",
-            "currency": PAYSTACK_CURRENCY,
-            "reference": reference,
-            "callback_url": f"{WEBHOOK_BASE_URL}/payment-success",
-            "metadata": {
-                "user_id": user_id,
-                "plan": plan,
-                "custom_fields": [
-                    {
-                        "display_name": "Telegram User ID",
-                        "variable_name": "telegram_user_id",
-                        "value": str(user_id)
-                    },
-                    {
-                        "display_name": "Plan",
-                        "variable_name": "plan",
-                        "value": plan
-                    }
-                ]
-            }
-        }
-        
-        # Create Paystack transaction
-        headers = {
-            "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.post(
-            "https://api.paystack.co/transaction/initialize",
-            json=payment_data,
-            headers=headers
-        )
-        
-        result = response.json()
-        
-        if result.get('status') and result['data']:
-            payment_url = result['data']['authorization_url']
-            paystack_reference = result['data']['reference']
-            
-            # Store payment record
-            cur = db.cursor()
-            cur.execute(
-                "INSERT INTO payments (user_id, plan, amount, reference, paystack_reference, payment_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, plan, plan_data['price'], reference, paystack_reference, payment_url, now_ts())
-            )
-            db.commit()
-            
-            print(f"✅ Paystack payment created for user {user_id}, plan {plan}")
-            return payment_url, reference
-            
-        else:
-            print(f"❌ Paystack error: {result.get('message', 'Unknown error')}")
-            return None, None
-            
-    except Exception as e:
-        print(f"❌ Paystack payment creation error: {e}")
-        return None, None
+# PAYSTACK PAYMENT PAGE INTEGRATION
+def get_payment_page_url(plan):
+    """Get Paystack payment page URLs for each plan"""
+    payment_pages = {
+        "premium": "https://paystack.com/pay/turnitq-premium",
+        "pro": "https://paystack.com/pay/turnitq-pro", 
+        "elite": "https://paystack.com/pay/turnitq-elite"
+    }
+    return payment_pages.get(plan)
 
-def verify_paystack_payment(reference):
-    """Verify Paystack payment status"""
-    try:
-        headers = {
-            "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
-            "Content-Type": "application/json"
+def handle_payment_selection(user_id, plan):
+    """Handle payment selection with payment page links"""
+    plan_data = PLANS[plan]
+    
+    # Get payment page URL
+    payment_url = get_payment_page_url(plan)
+    
+    if payment_url:
+        # Add user ID as reference to track payments
+        tracking_url = f"{payment_url}?c=telegram_{user_id}"
+        
+        # Create inline keyboard with payment link
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": f"💰 Pay ${plan_data['price']}", "url": tracking_url}],
+                [{"text": "📋 Plan Features", "callback_data": f"plan_details_{plan}"}],
+                [{"text": "🔄 View Other Plans", "callback_data": "show_plans"}]
+            ]
         }
         
-        response = requests.get(
-            f"https://api.paystack.co/transaction/verify/{reference}",
-            headers=headers
+        payment_message = (
+            f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\n"
+            f"✨ Features:\n" +
+            "\n".join(f"• {feature}" for feature in plan_data["features"]) +
+            f"\n\n📝 Your Telegram ID: <code>{user_id}</code>\n"
+            f"🔒 Include this ID in payment reference\n\n"
+            f"Click 'Pay Now' to complete your subscription payment."
         )
         
-        result = response.json()
-        
-        if result.get('status') and result['data']:
-            payment_data = result['data']
-            return {
-                "status": payment_data['status'],
-                "amount": payment_data['amount'] / 100,  # Convert from kobo/cents
-                "currency": payment_data['currency'],
-                "paid_at": payment_data.get('paid_at'),
-                "reference": payment_data['reference'],
-                "metadata": payment_data.get('metadata', {})
-            }
-        else:
-            return {"status": "failed", "error": result.get('message', 'Verification failed')}
-            
-    except Exception as e:
-        print(f"❌ Paystack verification error: {e}")
-        return {"status": "error", "error": str(e)}
+        send_telegram_message(user_id, payment_message, reply_markup=keyboard)
+    else:
+        send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
 
 def activate_user_subscription(user_id, plan):
     """Activate user's subscription after successful payment"""
@@ -432,12 +375,6 @@ def activate_user_subscription(user_id, plan):
             (plan, plan_data['daily_limit'], expiry_date, user_id)
         )
         
-        # Update payment status
-        cur.execute(
-            "UPDATE payments SET status='success', verified_at=? WHERE user_id=? AND status='pending'",
-            (now_ts(), user_id)
-        )
-        
         db.commit()
         
         print(f"✅ Subscription activated for user {user_id}, plan {plan}")
@@ -447,7 +384,7 @@ def activate_user_subscription(user_id, plan):
         print(f"❌ Subscription activation error: {e}")
         return None
 
-# REAL TURNITIN / SIMULATION helpers (unchanged logic)
+# REAL TURNITIN / SIMULATION helpers
 def setup_undetected_driver():
     try:
         import undetected_chromedriver as uc
@@ -910,7 +847,7 @@ def user_has_queued_or_processing(user_id) -> int:
 
 def queue_submission_notify(user_id):
     # Notify user about queue
-    message = "🕒 Your assignment is queued.\nYou’ll receive your similarity report in a few minutes (usually 5–10 min)."
+    message = "🕒 Your assignment is queued.\nYou'll receive your similarity report in a few minutes (usually 5-10 min)."
     send_telegram_message(user_id, message)
 
 def cancel_user_submission(user_id):
@@ -936,6 +873,7 @@ def home():
     <h1>TurnitQ Bot - Render Deployment</h1>
     <p>Status: 🟢 Running with Advanced Analysis & Paystack Payments</p>
     <p><a href="/debug">Debug Info</a></p>
+    <p><a href="/manual-activate">Manual Activation</a></p>
     """
 
 @app.route("/debug")
@@ -957,61 +895,77 @@ def debug():
 def payment_success():
     """Payment success page - users land here after Paystack payment"""
     reference = request.args.get('reference', '')
+    telegram_id = request.args.get('telegram_id', '')
+    
     return f"""
     <h1>Payment Successful! 🎉</h1>
-    <p>Thank you for your payment. Your subscription has been activated.</p>
+    <p>Thank you for your payment. Your subscription will be activated shortly.</p>
     <p>Reference: {reference}</p>
+    {f'<p>Telegram ID: {telegram_id}</p>' if telegram_id else ''}
     <p>You can now return to Telegram and use your new features!</p>
     <p><a href="https://t.me/your_bot_username">Return to Telegram</a></p>
     """
 
-@app.route("/paystack-webhook", methods=["POST"])
-def paystack_webhook():
-    """Paystack webhook for payment verification"""
+@app.route("/manual-activate", methods=['GET', 'POST'])
+def manual_activation():
+    """Manual activation endpoint for users who paid"""
+    if request.method == 'GET':
+        return '''
+        <h2>Activate TurnitQ Subscription</h2>
+        <form method="POST">
+            <p>Telegram User ID: <input type="text" name="user_id" required></p>
+            <p>Plan: 
+                <select name="plan">
+                    <option value="premium">Premium - $8</option>
+                    <option value="pro">Pro - $29</option>
+                    <option value="elite">Elite - $79</option>
+                </select>
+            </p>
+            <p>Payment Reference: <input type="text" name="reference"></p>
+            <button type="submit">Activate Subscription</button>
+        </form>
+        '''
+    
+    # Handle form submission
+    user_id = request.form.get('user_id')
+    plan = request.form.get('plan')
+    reference = request.form.get('reference', 'manual')
+    
     try:
-        signature = request.headers.get('x-paystack-signature')
-        if not signature:
-            print("❌ No signature in webhook")
-            return jsonify({"status": "error"}), 400
+        user_id = int(user_id)
+        expiry_date = activate_user_subscription(user_id, plan)
         
-        data = request.get_json()
-        event = data.get('event')
-        
-        if event == 'charge.success':
-            payment_data = data.get('data', {})
-            reference = payment_data.get('reference')
-            status = payment_data.get('status')
+        if expiry_date:
+            # Store payment record
+            cur = db.cursor()
+            cur.execute(
+                "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, plan, PLANS[plan]['price'], reference, 'success', now_ts(), now_ts())
+            )
+            db.commit()
             
-            if status == 'success':
-                verification = verify_paystack_payment(reference)
-                if verification.get('status') == 'success':
-                    metadata = verification.get('metadata', {})
-                    user_id = metadata.get('user_id')
-                    plan = metadata.get('plan')
-                    
-                    if user_id and plan:
-                        expiry_date = activate_user_subscription(int(user_id), plan)
-                        if expiry_date:
-                            plan_data = PLANS[plan]
-                            success_message = (
-                                f"🎉 Payment Successful!\n\n"
-                                f"✅ Your {plan_data['name']} plan is now active!\n"
-                                f"📅 Expires: {expiry_date}\n"
-                                f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
-                                f"Thank you for upgrading! You can now use all premium features."
-                            )
-                            send_telegram_message(int(user_id), success_message)
-                            print(f"✅ Subscription activated for user {user_id}")
-                        else:
-                            print(f"❌ Failed to activate subscription for user {user_id}")
-                    
-                    return jsonify({"status": "success"}), 200
-        
-        return jsonify({"status": "ignored"}), 200
-        
+            # Send confirmation to user
+            plan_data = PLANS[plan]
+            success_message = (
+                f"🎉 Subscription Activated!\n\n"
+                f"✅ Your {plan_data['name']} plan is now active!\n"
+                f"📅 Expires: {expiry_date}\n"
+                f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
+                f"Thank you for your payment!"
+            )
+            send_telegram_message(user_id, success_message)
+            
+            return f'''
+            <h2>✅ Subscription Activated!</h2>
+            <p>User {user_id} has been upgraded to {plan} plan.</p>
+            <p>Expiry: {expiry_date}</p>
+            <p>They have been notified on Telegram.</p>
+            '''
+        else:
+            return "<h2>❌ Activation Failed</h2><p>Could not activate subscription.</p>"
+            
     except Exception as e:
-        print(f"❌ Paystack webhook error: {e}")
-        return jsonify({"status": "error"}), 500
+        return f"<h2>Error</h2><p>{str(e)}</p>"
 
 @app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
 def telegram_webhook(bot_token):
@@ -1043,7 +997,7 @@ def telegram_webhook(bot_token):
                     # Prevent second free attempt
                     if not is_free_check and user_data['free_checks_used'] > 0 and user_data['plan'] == 'free':
                         upgrade_keyboard = create_inline_keyboard([[("💎 Upgrade Plan", "plan_premium")]])
-                        send_telegram_message(user_id, "⚠️ You’ve already used your free check. Subscribe to continue using TurnitQ.", reply_markup=upgrade_keyboard)
+                        send_telegram_message(user_id, "⚠️ You've already used your free check. Subscribe to continue using TurnitQ.", reply_markup=upgrade_keyboard)
                         return "ok", 200
                     
                     # Check daily limit
@@ -1074,8 +1028,6 @@ def telegram_webhook(bot_token):
                             cur.execute("UPDATE submissions SET status='queued' WHERE id=?", (sub_id,))
                             db.commit()
                             queue_submission_notify(user_id)
-                            # The file is stored temporarily; we keep the file on disk until processed or cancelled.
-                            # Optionally, you can add an automatic dispatcher to start queued submissions.
                         else:
                             # start processing immediately
                             cur.execute("UPDATE submissions SET status='processing' WHERE id=?", (sub_id,))
@@ -1110,15 +1062,15 @@ def telegram_webhook(bot_token):
                     f"Plan: {plan}\n"
                     f"Subscription active: {'Yes' if sub_active else 'No'}\n"
                     f"Subscription ends: {expiry}\n"
-                    f"Daily Total Checks: {daily_limit-used}\n"
+                    f"Daily checks used: {used}/{daily_limit}\n"
                     f"Free checks used: {free_used}\n"
                 )
                 send_telegram_message(user_id, info_message)
             elif text.startswith("/upgrade"):
                 keyboard = create_inline_keyboard([
-                    [("⚡ Upgrade to  Premium - $8", "plan_premium")],
-                    [("🚀 Go Pro - $29", "plan_pro")],
-                    [("👑 Go Elite - $79", "plan_elite")]
+                    [("⚡ Premium - $8", "plan_premium")],
+                    [("🚀 Pro - $29", "plan_pro")],
+                    [("👑 Elite - $79", "plan_elite")]
                 ])
                 send_telegram_message(user_id, "📊 Choose your plan:", reply_markup=keyboard)
             elif text.startswith("/cancel"):
@@ -1143,7 +1095,7 @@ def telegram_webhook(bot_token):
                 # Check free-check usage: if free used, ask to upgrade (but allow paid users)
                 if u['plan'] == 'free' and u['free_checks_used'] > 0:
                     upgrade_keyboard = create_inline_keyboard([[("💎 Upgrade Plan", "plan_premium")]])
-                    send_telegram_message(user_id, "⚠️ You’ve already used your free check. Subscribe to continue using TurnitQ.", reply_markup=upgrade_keyboard)
+                    send_telegram_message(user_id, "⚠️ You've already used your free check. Subscribe to continue using TurnitQ.", reply_markup=upgrade_keyboard)
                     return "ok", 200
 
                 # Save session and ask for options
@@ -1169,40 +1121,42 @@ def telegram_webhook(bot_token):
             
             if data.startswith("plan_"):
                 plan = data.replace("plan_", "")
+                handle_payment_selection(user_id, plan)
+                    
+            elif data.startswith("plan_details_"):
+                plan = data.replace("plan_details_", "")
                 plan_data = PLANS[plan]
                 
-                # Create Paystack payment
-                # payment_url, reference = create_paystack_payment(user_id, plan)
-                payment_url,reference = create_paystack_payment(user_id, plan)
-                
-                payment_message = (
-                    f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\n"
-                    f"Features:\n" +
-                    "\n".join(f"• {feature}" for feature in plan_data["features"]) +
-                    f"\n\nClick the link below to complete your payment:\n"
-                    f"{plan_data['payment_url']}"
+                features_text = "\n".join(f"✅ {feature}" for feature in plan_data["features"])
+                details_message = (
+                    f"📊 {plan_data['name']} Plan Details:\n\n"
+                    f"{features_text}\n\n"
+                    f"💰 Price: ${plan_data['price']} per {plan_data['duration_days']} days\n"
+                    f"📅 Billing: Every {plan_data['duration_days']} days\n"
+                    f"👤 Your ID: <code>{user_id}</code>\n\n"
+                    f"Ready to upgrade? Your Telegram ID will be automatically linked."
                 )
- 
                 
-                send_telegram_message(user_id, payment_message)   
-                    
+                keyboard = create_inline_keyboard([
+                    [("💳 Subscribe Now", f"plan_{plan}")],
+                    [("⬅️ Back to Plans", "show_plans")]
+                ])
                 
-                if payment_url:
-                    payment_message1 = (
-                        
-                        f"<a href='#'>Pay ${plan_data['price']} and {payment_url} with Paystack (The link is not accessible because the developer has not been authorized to use paystack gateaway)</a>\n\n"
-                        f"After payment, your account will be upgraded automatically!"
-                        )
-                    
-                    send_telegram_message(user_id, payment_message1)
-                else:
-                    send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
-                    
+                send_telegram_message(user_id, details_message, reply_markup=keyboard)
+                
+            elif data == "show_plans":
+                keyboard = create_inline_keyboard([
+                    [("⚡ Premium - $8", "plan_premium")],
+                    [("🚀 Pro - $29", "plan_pro")],
+                    [("👑 Elite - $79", "plan_elite")]
+                ])
+                send_telegram_message(user_id, "📊 Choose your plan:", reply_markup=keyboard)
+                
             elif data == "upgrade_after_free":
                 keyboard = create_inline_keyboard([
-                    [("⚡ Upgrade to Premium - $8", "plan_premium")],
-                    [("🚀 Go Pro - $29", "plan_pro")],
-                    [("👑 Go Elite - $79", "plan_elite")]
+                    [("⚡ Premium - $8", "plan_premium")],
+                    [("🚀 Pro - $29", "plan_pro")],
+                    [("👑 Elite - $79", "plan_elite")]
                 ])
                 send_telegram_message(user_id, "📊 Choose your upgrade plan:", reply_markup=keyboard)
                 
