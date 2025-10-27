@@ -331,66 +331,7 @@ def get_payment_page_url(plan, user_id):
         # Add Telegram ID and plan as URL parameters
         return f"{base_url}?callback={WEBHOOK_BASE_URL}/payment-success&telegram_id={user_id}&plan={plan}"
     return None
-def handle_payment_selection(user_id, plan):
-    """Handle payment selection with automatic activation setup"""
-    plan_data = PLANS[plan]
-    
-    # Get payment page URL with Telegram ID
-    payment_url = get_payment_page_url(plan, user_id)
-    
-    if payment_url:
-        # Create inline keyboard with payment link
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": f"💰 Pay ${plan_data['price']}", "url": payment_url}],
-                [{"text": "📋 Plan Features", "callback_data": f"plan_details_{plan}"}],
-                [{"text": "🔄 Refresh Status", "callback_data": f"refresh_payment_{user_id}_{plan}"}]
-            ]
-        }
-        
-        payment_message = (
-            f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\n"
-            f"✨ Features:\n" +
-            "\n".join(f"• {feature}" for feature in plan_data["features"]) +
-            f"\n\n🚀 Automatic Activation:\n"
-            f"• Click 'Pay Now' to complete payment\n"
-            f"• Your subscription activates INSTANTLY\n"
-            f"• No manual steps required\n\n"
-            f"🔑 Your Telegram ID: <code>{user_id}</code>\n"
-            f"📝 Make sure this ID appears in the payment form\n\n"
-            f"Click below to start:"
-        )
-        
-        send_telegram_message(user_id, payment_message, reply_markup=keyboard)
-    else:
-        send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
 
-def verify_paystack_payment(reference):
-    """Verify payment with Paystack API"""
-    try:
-        url = f"https://api.paystack.co/transaction/verify/{reference}"
-        headers = {
-            "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.get(url, headers=headers)
-        result = response.json()
-        
-        if result.get('status') and result['data'].get('status') == 'success':
-            return {
-                "status": True,
-                "amount": result['data'].get('amount', 0),
-                "currency": result['data'].get('currency', 'GHS'),
-                "plan": result['data'].get('metadata', {}).get('plan', '')
-            }
-        else:
-            print(f"❌ Payment verification failed: {result}")
-            return {"status": False}
-            
-    except Exception as e:
-        print(f"❌ Payment verification error: {e}")
-        return {"status": False}
 def handle_payment_selection(user_id, plan):
     """Handle payment selection with automatic activation setup"""
     plan_data = PLANS[plan]
@@ -424,6 +365,33 @@ def handle_payment_selection(user_id, plan):
         send_telegram_message(user_id, payment_message, reply_markup=keyboard)
     else:
         send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
+
+def verify_paystack_payment(reference):
+    """Verify payment with Paystack API"""
+    try:
+        url = f"https://api.paystack.co/transaction/verify/{reference}"
+        headers = {
+            "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.get(url, headers=headers)
+        result = response.json()
+        
+        if result.get('status') and result['data'].get('status') == 'success':
+            return {
+                "status": True,
+                "amount": result['data'].get('amount', 0),
+                "currency": result['data'].get('currency', 'GHS'),
+                "plan": result['data'].get('metadata', {}).get('plan', '')
+            }
+        else:
+            print(f"❌ Payment verification failed: {result}")
+            return {"status": False}
+            
+    except Exception as e:
+        print(f"❌ Payment verification error: {e}")
+        return {"status": False}
 
 def activate_user_subscription(user_id, plan):
     """Activate user's subscription after successful payment"""
@@ -955,7 +923,7 @@ def debug():
     <p><strong>Successful Payments:</strong> {payment_count}</p>
     <p><strong>Status:</strong> 🟢 Automatic Fallback & Payments Active</p>
     """
-#hello
+
 @app.route("/payment-success")
 def payment_success():
     """Handle payment success redirect and activate subscription"""
@@ -974,16 +942,16 @@ def payment_success():
                 
                 # Verify this is a valid plan
                 if plan in PLANS:
-                    # ACTIVATE SUBSCRIPTION IMMEDIATELY
-                    expiry_date = activate_user_subscription(user_id, plan)
+                    # First verify the payment with Paystack
+                    verification_result = verify_paystack_payment(reference)
                     
-                    if expiry_date:
-                        # Verify payment with Paystack API
-                        verification_result = verify_paystack_payment(reference)
+                    if verification_result.get('status'):
+                        amount = verification_result.get('amount', 0) / 100
                         
-                        if verification_result.get('status'):
-                            amount = verification_result.get('amount', 0) / 100
-                            
+                        # ACTIVATE SUBSCRIPTION IMMEDIATELY
+                        expiry_date = activate_user_subscription(user_id, plan)
+                        
+                        if expiry_date:
                             # Store payment record
                             cur = db.cursor()
                             cur.execute(
@@ -1081,9 +1049,9 @@ def payment_success():
                             """
                             return success_html
                         else:
-                            return "Payment verification failed. Please contact support."
+                            return "Subscription activation failed. Please contact support."
                     else:
-                        return "Subscription activation failed. Please contact support."
+                        return "Payment verification failed. Please contact support."
                 else:
                     return "Invalid plan. Please contact support."
                     
@@ -1240,7 +1208,6 @@ def paystack_webhook():
         event = data.get('event')
         
         print(f"📨 Received Paystack webhook: {event}")
-        print(f"📊 Full webhook data: {json.dumps(data, indent=2)}")
         
         if event == 'charge.success':
             payment_data = data.get('data', {})
@@ -1252,20 +1219,17 @@ def paystack_webhook():
             
             print(f"💰 Payment successful - Reference: {reference}, Amount: ${amount}")
             print(f"📧 Customer email: {customer_email}")
-            print(f"📋 Custom fields: {custom_fields}")
-            print(f"📝 Metadata: {metadata}")
             
             # Extract user info from multiple sources
             user_id = None
             plan = None
             
-            # METHOD 1: Extract from custom_fields (Primary method for payment pages)
+            # METHOD 1: Extract from custom_fields
             for field in custom_fields:
-                print(f"🔍 Checking field: {field}")
                 variable_name = field.get('variable_name', '').lower()
                 value = field.get('value', '')
                 
-                if 'telegram' in variable_name or 'telegram' in str(value):
+                if 'telegram' in variable_name:
                     user_id = value
                     print(f"✅ Found Telegram ID in custom field: {user_id}")
                 
@@ -1391,8 +1355,6 @@ def paystack_webhook():
             else:
                 print(f"❌ Missing user_id or plan in webhook")
                 print(f"User ID: {user_id}, Plan: {plan}")
-                print(f"Custom fields: {custom_fields}")
-                print(f"Metadata: {metadata}")
                 
                 # Log this for debugging
                 cur = db.cursor()
@@ -1406,7 +1368,6 @@ def paystack_webhook():
         
         elif event == 'charge.failed':
             print(f"❌ Payment failed: {data}")
-            # You could notify the user here if you have their ID
             return jsonify({"status": "payment_failed"}), 200
             
         else:
