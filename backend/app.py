@@ -1077,7 +1077,7 @@ def activate_subscription():
     """Process the Telegram ID and activate subscription"""
     user_id = request.form.get('user_id')
     plan = request.form.get('plan')
-    reference = request.form.get('reference', 'payment_page')
+    reference = request.form.get('reference', 'payment_page')  # This gets the value from the hidden input
     
     try:
         user_id = int(user_id)
@@ -1181,6 +1181,7 @@ def activate_subscription():
                         <p><strong>Plan:</strong> {plan.upper()}</p>
                         <p><strong>Expiry Date:</strong> {expiry_date}</p>
                         <p><strong>Daily Checks:</strong> {PLANS[plan]['daily_limit']}</p>
+                        <p><strong>Reference:</strong> {reference}</p>
                     </div>
                     
                     <p>✅ The user has been notified on Telegram.</p>
@@ -1322,7 +1323,6 @@ def activate_subscription():
         </body>
         </html>
         '''
-
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
     """Manual activation endpoint for users who paid"""
