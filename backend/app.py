@@ -319,7 +319,7 @@ def create_inline_keyboard(buttons):
 
 # PAYSTACK PAYMENT PAGE INTEGRATION - FIXED
 def get_payment_page_url(plan, user_id):
-    """Store payment details in database before redirecting"""
+    """Get Paystack payment page URLs with Telegram ID properly embedded"""
     payment_pages = {
         "premium": "https://paystack.shop/pay/premiumpage",
         "pro": "https://paystack.shop/pay/propage", 
@@ -328,19 +328,8 @@ def get_payment_page_url(plan, user_id):
     
     base_url = payment_pages.get(plan)
     if base_url:
-        # Generate a unique reference
-        reference = f"TQ_{user_id}_{plan}_{int(time.time())}"
-        
-        # Store in database before redirect
-        cur = db.cursor()
-        cur.execute(
-            "INSERT INTO payments (user_id, plan, amount, reference, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, plan, PLANS[plan]['price'], reference, 'pending', now_ts())
-        )
-        db.commit()
-        
-        success_url = f"{WEBHOOK_BASE_URL}/payment-success"
-        return f"{base_url}?reference={reference}&success_url={success_url}"
+        # Add Telegram ID as custom field parameter - Paystack standard format
+        return f"{base_url}?custom_field[Telegram ID]={user_id}"
     return None
 def handle_payment_selection(user_id, plan):
     """Handle payment selection with automatic activation setup"""
@@ -943,146 +932,71 @@ def debug():
 #hello
 @app.route("/payment-success")
 def payment_success():
-    """Activate subscription and send confirmation when user arrives after payment"""
-    reference = request.args.get('reference', '')
+    """Ask user for Telegram ID and activate subscription based on plan from URL"""
+    plan = request.args.get('plan')  # Get plan from URL parameter
     
-    print(f"🎯 Payment completed successfully, reference: {reference}")
+    # Show simple form to enter Telegram ID
+    return f'''
+    <h2>Activate TurnitQ Subscription</h2>
+    <p><strong>Plan Selected:</strong> {plan.upper()}</p>
+    <form method="POST" action="/activate-subscription">
+        <p>Telegram User ID: <input type="number" name="user_id" required></p>
+        <input type="hidden" name="plan" value="{plan}">
+        <input type="hidden" name="reference" value="payment_page">
+        <button type="submit">Activate Subscription</button>
+    </form>
     
-    # Look up payment details from database
-    cur = db.cursor()
-    payment = cur.execute(
-        "SELECT user_id, plan FROM payments WHERE reference=?", 
-        (reference,)
-    ).fetchone()
-    
-    if not payment:
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Payment Processed - TurnitQ</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                body { 
-                    font-family: Arial, sans-serif; 
-                    text-align: center; 
-                    padding: 20px; 
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    min-height: 100vh;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }
-                .container { 
-                    background: white; 
-                    padding: 30px; 
-                    border-radius: 15px; 
-                    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-                    color: #333;
-                    max-width: 500px;
-                    width: 100%;
-                }
-                .success-icon { 
-                    font-size: 60px; 
-                    color: #4CAF50; 
-                    margin-bottom: 20px;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="success-icon">✅</div>
-                <h1>Payment Processed! 🎉</h1>
-                <p>Your payment has been received and is being processed.</p>
-                <p>You will receive a confirmation message in Telegram shortly.</p>
-                <p style="margin-top: 20px; font-size: 14px; color: #666;">
-                    You can close this window and return to Telegram.
-                </p>
-            </div>
-        </body>
-        </html>
-        """
-    
-    user_id = payment['user_id']
-    plan = payment['plan']
-    
-    # Activate the subscription
-    expiry_date = activate_user_subscription(user_id, plan)
-    
-    # Update payment status to success
-    cur.execute(
-        "UPDATE payments SET status='success', verified_at=? WHERE reference=?",
-        (now_ts(), reference)
-    )
-    db.commit()
-    
-    # Send confirmation message to user
-    plan_data = PLANS[plan]
-    success_message = (
-        f"🎉 Payment Successful!\n\n"
-        f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
-        f"📅 Expires: {expiry_date}\n"
-        f"🔓 Daily checks: {plan_data['daily_limit']}\n"
-        f"💰 Amount: ${plan_data['price']}\n\n"
-        f"🚀 You can now use all premium features immediately!"
-    )
-    send_telegram_message(user_id, success_message)
+    <p><strong>How to find your Telegram ID:</strong></p>
+    <p>1. Message @userinfobot on Telegram</p>
+    <p>2. Copy your ID number</p>
+    <p>3. Paste it above and click "Activate Subscription"</p>
+    '''
 
-    # Show success page to user
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Payment Successful - TurnitQ</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body {{ 
-                font-family: Arial, sans-serif; 
-                text-align: center; 
-                padding: 20px; 
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }}
-            .container {{ 
-                background: white; 
-                padding: 30px; 
-                border-radius: 15px; 
-                box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-                color: #333;
-                max-width: 500px;
-                width: 100%;
-            }}
-            .success-icon {{ 
-                font-size: 60px; 
-                color: #4CAF50; 
-                margin-bottom: 20px;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="success-icon">✅</div>
-            <h1>Payment Successful! 🎉</h1>
-            <p><strong>Your subscription has been activated!</strong></p>
-            <p>We've sent a confirmation message to your Telegram account.</p>
-            <p>You can now use all premium features.</p>
-            <p style="margin-top: 20px; font-size: 14px; color: #666;">
-                This window will close automatically in 5 seconds...
-            </p>
-        </div>
+
+@app.route("/activate-subscription", methods=["POST"])
+def activate_subscription():
+    """Process the Telegram ID and activate subscription"""
+    user_id = request.form.get('user_id')
+    plan = request.form.get('plan')
+    reference = request.form.get('reference', 'payment_page')
+    
+    try:
+        user_id = int(user_id)
+        expiry_date = activate_user_subscription(user_id, plan)
         
-        <script>
-            // Auto-close after 5 seconds
-            setTimeout(() => {{ window.close(); }}, 5000);
-        </script>
-    </body>
-    </html>
-    """
+        if expiry_date:
+            # Store payment record
+            cur = db.cursor()
+            cur.execute(
+                "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, plan, PLANS[plan]['price'], reference, 'success', now_ts(), now_ts())
+            )
+            db.commit()
+            
+            # Send confirmation to user
+            plan_data = PLANS[plan]
+            success_message = (
+                f"🎉 Subscription Activated!\n\n"
+                f"✅ Your {plan_data['name']} plan is now active!\n"
+                f"📅 Expires: {expiry_date}\n"
+                f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
+                f"Thank you for your payment!"
+            )
+            send_telegram_message(user_id, success_message)
+            
+            return f'''
+            <h2>✅ Subscription Activated!</h2>
+            <p>User {user_id} has been upgraded to {plan} plan.</p>
+            <p>Expiry: {expiry_date}</p>
+            <p>They have been notified on Telegram.</p>
+            <p><a href="/payment-success?plan={plan}">Activate Another</a></p>
+            '''
+        else:
+            return "<h2>❌ Activation Failed</h2><p>Could not activate subscription.</p>"
+            
+    except Exception as e:
+        return f"<h2>Error</h2><p>{str(e)}</p>"
+
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
     """Manual activation endpoint for users who paid"""
