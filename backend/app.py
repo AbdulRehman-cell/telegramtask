@@ -933,8 +933,16 @@ def debug():
 @app.route("/payment-success")
 def payment_success():
     """Ask user for Telegram ID and activate subscription based on plan from URL"""
-    plan = request.args.get('plan')  # Get plan from URL parameter
-    reference = request.args.get('reference')
+    plan = request.args.get('plan', '')  # Get plan from URL parameter
+    
+    # Fix: Extract just the plan name if it contains ?reference
+    if '?' in plan:
+        plan = plan.split('?')[0]
+    
+    # Also get reference separately if needed
+    reference = request.args.get('reference', '')
+    
+    print(f"🔍 Debug - Plan: {plan}, Reference: {reference}")
     
     # Show simple form to enter Telegram ID
     return f'''
@@ -1071,7 +1079,6 @@ def payment_success():
     </body>
     </html>
     '''
-
 
 @app.route("/activate-subscription", methods=["POST"])
 def activate_subscription():
