@@ -938,7 +938,7 @@ def payment_success():
     # Show simple form to enter Telegram ID
     return f'''
     <h2>Activate TurnitQ Subscription</h2>
-    <p><strong>Plan Selected:</strong> {plan.upper()}</p>
+    <p><strong>Plan Selected:</strong> {plan}</p>
     <form method="POST" action="/activate-subscription">
         <p>Telegram User ID: <input type="number" name="user_id" required></p>
         <input type="hidden" name="plan" value="{plan}">
