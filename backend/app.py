@@ -934,6 +934,7 @@ def debug():
 def payment_success():
     """Ask user for Telegram ID and activate subscription based on plan from URL"""
     plan = request.args.get('plan')  # Get plan from URL parameter
+    reference = request.args.get('reference')
     
     # Show simple form to enter Telegram ID
     return f'''
@@ -1052,7 +1053,7 @@ def payment_success():
                 </div>
                 
                 <input type="hidden" name="plan" value="{plan}">
-                <input type="hidden" name="reference" value="payment_page">
+                <input type="hidden" name="reference" value="{reference}">
                 
                 <button type="submit">🚀 Activate Subscription</button>
             </form>
@@ -1077,7 +1078,7 @@ def activate_subscription():
     """Process the Telegram ID and activate subscription"""
     user_id = request.form.get('user_id')
     plan = request.form.get('plan')
-    reference = request.form.get('reference', 'payment_page')  # This gets the value from the hidden input
+    reference = request.form.get('reference')  # This gets the value from the hidden input
     
     try:
         user_id = int(user_id)
