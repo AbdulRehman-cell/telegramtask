@@ -1041,7 +1041,7 @@ def payment_success():
         <div class="container">
             <div class="header">
                 <h2>🎉 Payment Successful!</h2>
-                <div class="plan-badge">Plan: {plan.upper()}</div>
+                <div class="plan-badge">Plan: {plan}</div>
             </div>
             
             <form method="POST" action="/activate-subscription">
@@ -1077,7 +1077,7 @@ def activate_subscription():
     """Process the Telegram ID and activate subscription"""
     user_id = request.form.get('user_id')
     plan = request.form.get('plan')
-    reference = request.form.get('reference', 'payment_page')
+    reference = request.form.get('reference')
     
     try:
         user_id = int(user_id)
