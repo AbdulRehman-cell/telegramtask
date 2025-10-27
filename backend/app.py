@@ -355,10 +355,8 @@ def handle_payment_selection(user_id, plan):
             "\n".join(f"• {feature}" for feature in plan_data["features"]) +
             f"\n\n🚀 Automatic Activation:\n"
             f"• Click 'Pay Now' to complete payment\n"
-            f"• Your subscription activates INSTANTLY\n"
-            f"• No manual steps required\n\n"
+            f"• Your subscription activates automatically\n"
             f"🔑 Your Telegram ID: <code>{user_id}</code>\n"
-            f"📧 Use email: user{user_id}@turnitq.com if asked\n\n"
             f"Click below to start:"
         )
         
@@ -731,7 +729,7 @@ def process_document(submission_id, file_path, options):
                 user_id, 
                 turnitin_result["similarity_report_path"], 
                 caption=caption,
-                filename=f"report_{filename}.txt"
+                filename=f"report_{filename}.pdf"
             )
         
         # Only send AI report to paid users (or to a free user if it was their free check)
@@ -741,7 +739,7 @@ def process_document(submission_id, file_path, options):
                 user_id,
                 turnitin_result["ai_report_path"],
                 caption="🤖 AI Writing Analysis",
-                filename=f"ai_analysis_{filename}.txt"
+                filename=f"ai_analysis_{filename}.pdf"
             )
         
         if is_free_check:
@@ -1660,18 +1658,16 @@ def telegram_webhook(bot_token):
                     f"👤 <b>Your Account Info:</b>\n\n"
                     f"🆔 <b>User ID:</b> {user_id}\n"
                     f"📊 <b>Plan:</b> {plan_name}\n"
-                    f"✅ <b>Subscription Active:</b> {sub_active}\n"
+                    f"📈 <b>Daily Total Checks :</b> {daily_limit-used}\n"
                     f"📅 <b>Subscription Ends:</b> {expiry}\n"
-                    f"📈 <b>Daily Checks Used:</b> {used}/{daily_limit}\n"
-                    f"🎁 <b>Free Checks Used:</b> {free_used}\n\n"
-                    f"💡 <i>Use /upgrade to get more features!</i>"
                 )
                 send_telegram_message(user_id, info_message)
             elif text.startswith("/upgrade"):
+                send_telegram_message(f"<b>🔓 Unlock More with TurnitQ Premium Plans</b>\n""Your first check was free — now take your writing game to the next level.\n""Choose the plan that fits your workload 👇")
                 keyboard = create_inline_keyboard([
                     [("⚡ Premium - $8", "plan_premium")],
-                    [("🚀 Pro - $29", "plan_pro")],
-                    [("👑 Elite - $79", "plan_elite")]
+                    [("🚀 Go Pro - $29", "plan_pro")],
+                    [("👑 Go Elite - $79", "plan_elite")]
                 ])
                 send_telegram_message(user_id, "📊 Choose your plan:", reply_markup=keyboard)
             elif text.startswith("/cancel"):
