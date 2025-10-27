@@ -1077,7 +1077,7 @@ def activate_subscription():
     """Process the Telegram ID and activate subscription"""
     user_id = request.form.get('user_id')
     plan = request.form.get('plan')
-    reference = request.form.get('reference')
+    
     
     try:
         user_id = int(user_id)
@@ -1088,7 +1088,7 @@ def activate_subscription():
             cur = db.cursor()
             cur.execute(
                 "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, plan, PLANS[plan]['price'], reference, 'success', now_ts(), now_ts())
+                (user_id, plan, PLANS[plan]['price'],'success', now_ts(), now_ts())
             )
             db.commit()
             
