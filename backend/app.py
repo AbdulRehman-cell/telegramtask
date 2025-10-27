@@ -331,39 +331,6 @@ def get_payment_page_url(plan, user_id):
         # Add Telegram ID as custom field parameter - Paystack standard format
         return f"{base_url}?custom_field[Telegram ID]={user_id}"
     return None
-def handle_payment_selection(user_id, plan):
-    """Handle payment selection with automatic activation setup"""
-    plan_data = PLANS[plan]
-    
-    # Get payment page URL with Telegram ID
-    payment_url = get_payment_page_url(plan, user_id)
-    
-    if payment_url:
-        # Create inline keyboard with payment link
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": f"💰 Pay ${plan_data['price']}", "url": payment_url}],
-                [{"text": "📋 Plan Features", "callback_data": f"plan_details_{plan}"}],
-                [{"text": "🔄 Refresh Status", "callback_data": f"refresh_payment_{user_id}_{plan}"}]
-            ]
-        }
-        
-        payment_message = (
-            f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\n"
-            f"✨ Features:\n" +
-            "\n".join(f"• {feature}" for feature in plan_data["features"]) +
-            f"\n\n🚀 Automatic Activation:\n"
-            f"• Click 'Pay Now' to complete payment\n"
-            f"• Your subscription activates INSTANTLY\n"
-            f"• No manual steps required\n\n"
-            f"🔑 Your Telegram ID: <code>{user_id}</code>\n"
-            f"📝 Make sure this ID appears in the payment form\n\n"
-            f"Click below to start:"
-        )
-        
-        send_telegram_message(user_id, payment_message, reply_markup=keyboard)
-    else:
-        send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
 
 def handle_payment_selection(user_id, plan):
     """Handle payment selection with automatic activation setup"""
@@ -929,7 +896,7 @@ def debug():
     <p><strong>Successful Payments:</strong> {payment_count}</p>
     <p><strong>Status:</strong> 🟢 Automatic Fallback & Payments Active</p>
     """
-#hello
+
 @app.route("/payment-success")
 def payment_success():
     """Ask user for Telegram ID and activate subscription based on plan from URL"""
@@ -1331,6 +1298,7 @@ def activate_subscription():
         </body>
         </html>
         '''
+
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
     """Manual activation endpoint for users who paid"""
@@ -1680,20 +1648,23 @@ def telegram_webhook(bot_token):
                 send_telegram_message(user_id, "📄 Upload your document (.pdf or .docx)\nOnly one file can be processed at a time")
             elif text.startswith("/id"):
                 u = user_get(user_id)
+                plan_name = PLANS[u['plan']]['name'] if u['plan'] in PLANS else u['plan'].title()
                 expiry = u['expiry_date'] if u['expiry_date'] else "No active subscription"
                 plan = u['plan']
                 used = u['used_today']
                 daily_limit = u['daily_limit']
                 free_used = u['free_checks_used']
-                sub_active = bool(u['subscription_active'])
+                sub_active = "Yes" if u['subscription_active'] else "No"
+                
                 info_message = (
-                    f"👤 Your Account Info:\n"
-                    f"User ID: {user_id}\n"
-                    f"Plan: {plan}\n"
-                    f"Subscription active: {'Yes' if sub_active else 'No'}\n"
-                    f"Subscription ends: {expiry}\n"
-                    f"Daily checks used: {used}/{daily_limit}\n"
-                    f"Free checks used: {free_used}\n"
+                    f"👤 <b>Your Account Info:</b>\n\n"
+                    f"🆔 <b>User ID:</b> {user_id}\n"
+                    f"📊 <b>Plan:</b> {plan_name}\n"
+                    f"✅ <b>Subscription Active:</b> {sub_active}\n"
+                    f"📅 <b>Subscription Ends:</b> {expiry}\n"
+                    f"📈 <b>Daily Checks Used:</b> {used}/{daily_limit}\n"
+                    f"🎁 <b>Free Checks Used:</b> {free_used}\n\n"
+                    f"💡 <i>Use /upgrade to get more features!</i>"
                 )
                 send_telegram_message(user_id, info_message)
             elif text.startswith("/upgrade"):
