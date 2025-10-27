@@ -1057,7 +1057,7 @@ def activate_subscription():
         expiry_date = activate_user_subscription(user_id, plan)
         
         if expiry_date:
-            # Store payment record
+            # Store payment record .
             cur = db.cursor()
             cur.execute(
                 "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
