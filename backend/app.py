@@ -928,164 +928,252 @@ def debug():
 
 @app.route("/payment-success")
 def payment_success():
-    """Handle payment success redirect with all parameters"""
+    """Handle payment success redirect - extract Telegram ID from reference"""
     try:
-        # Get all parameters from URL
+        # Get parameters from URL
         reference = request.args.get('reference', '')
-        telegram_id = request.args.get('telegram_id', '')
-        plan = request.args.get('plan', '')
         
-        print(f"🎯 Payment Success - Reference: {reference}, Telegram ID: {telegram_id}, Plan: {plan}")
+        print(f"🎯 Payment Success - Reference: {reference}")
+        print(f"🔍 Full URL: {request.url}")
         
-        # Check if we have all required parameters
-        if reference and telegram_id and plan:
-            print("✅ All parameters received! Activating subscription...")
+        # If we have reference, extract Telegram ID and plan from Paystack API
+        if reference:
+            print(f"🔄 Extracting payment details from reference: {reference}")
             
-            try:
-                user_id = int(telegram_id)
+            # Verify payment and get all data from Paystack
+            verification_result = verify_paystack_payment(reference)
+            
+            if verification_result.get('status'):
+                payment_data = verification_result.get('data', {})
+                custom_fields = payment_data.get('custom_fields', [])
+                metadata = payment_data.get('metadata', {})
+                amount = payment_data.get('amount', 0) / 100
                 
-                # Verify this is a valid plan
-                if plan in PLANS:
-                    # Verify payment with Paystack
-                    verification_result = verify_paystack_payment(reference)
+                print(f"💰 Payment verified - Amount: ${amount}")
+                print(f"📋 Custom fields: {custom_fields}")
+                print(f"📝 Metadata: {metadata}")
+                
+                # Extract Telegram ID from custom fields
+                telegram_id = None
+                plan = None
+                
+                for field in custom_fields:
+                    variable_name = field.get('variable_name', '').lower()
+                    value = field.get('value', '')
                     
-                    if verification_result.get('status'):
-                        amount = verification_result.get('amount', 0) / 100
+                    if any(keyword in variable_name for keyword in ['telegram', 'telegram_id', 'telegramid', 'tg_id', 'tgid']):
+                        telegram_id = value
+                        print(f"✅ Extracted Telegram ID from custom field: {telegram_id}")
+                    
+                    if any(keyword in variable_name for keyword in ['plan', 'subscription', 'package']):
+                        plan = value
+                        print(f"✅ Extracted plan from custom field: {plan}")
+                
+                # If not found in custom fields, check metadata
+                if not telegram_id:
+                    telegram_id = metadata.get('telegram_id') or metadata.get('telegram_user_id')
+                    if telegram_id:
+                        print(f"✅ Extracted Telegram ID from metadata: {telegram_id}")
+                
+                if not plan:
+                    plan = metadata.get('plan')
+                    if plan:
+                        print(f"✅ Extracted plan from metadata: {plan}")
+                
+                # If still no plan, determine from amount
+                if not plan:
+                    plan_data = {8: 'premium', 29: 'pro', 79: 'elite'}
+                    closest_plan = min(plan_data.keys(), key=lambda x: abs(x - amount))
+                    if abs(amount - closest_plan) <= 5:
+                        plan = plan_data[closest_plan]
+                        print(f"💰 Inferred plan from amount: {plan} (${amount})")
+                
+                print(f"🔍 Final extraction - Telegram ID: {telegram_id}, Plan: {plan}")
+                
+                # If we have all required information, activate subscription
+                if telegram_id and plan:
+                    try:
+                        user_id = int(telegram_id)
                         
-                        # ACTIVATE SUBSCRIPTION
-                        expiry_date = activate_user_subscription(user_id, plan)
-                        
-                        if expiry_date:
-                            # Store payment record
-                            cur = db.cursor()
-                            cur.execute(
-                                "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                (user_id, plan, amount, reference, 'success', now_ts(), now_ts())
-                            )
-                            db.commit()
+                        if plan in PLANS:
+                            # ACTIVATE SUBSCRIPTION
+                            expiry_date = activate_user_subscription(user_id, plan)
                             
-                            # Send confirmation to user
-                            plan_data = PLANS[plan]
-                            success_message = (
-                                f"🎉 Payment Successful & Activated!\n\n"
-                                f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
-                                f"📅 Expires: {expiry_date}\n"
-                                f"🔓 Daily checks: {plan_data['daily_limit']}\n"
-                                f"💰 Amount: {amount} GHS\n\n"
-                                f"🚀 You can now use all premium features immediately!\n"
-                                f"📄 Upload a document to get started."
-                            )
-                            send_telegram_message(user_id, success_message)
-                            
-                            success_html = f"""
+                            if expiry_date:
+                                # Store payment record
+                                cur = db.cursor()
+                                cur.execute(
+                                    "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                    (user_id, plan, amount, reference, 'success', now_ts(), now_ts())
+                                )
+                                db.commit()
+                                
+                                # Send confirmation to user
+                                plan_data = PLANS[plan]
+                                success_message = (
+                                    f"🎉 Payment Successful & Activated!\n\n"
+                                    f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
+                                    f"📅 Expires: {expiry_date}\n"
+                                    f"🔓 Daily checks: {plan_data['daily_limit']}\n"
+                                    f"💰 Amount: {amount} GHS\n\n"
+                                    f"🚀 You can now use all premium features immediately!"
+                                )
+                                send_telegram_message(user_id, success_message)
+                                
+                                success_html = f"""
+                                <!DOCTYPE html>
+                                <html>
+                                <head>
+                                    <title>Payment Successful - TurnitQ</title>
+                                    <style>
+                                        body {{ font-family: Arial; text-align: center; padding: 50px; background: #f0f8ff; }}
+                                        .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                                        .success {{ color: #4CAF50; font-size: 48px; }}
+                                    </style>
+                                </head>
+                                <body>
+                                    <div class="container">
+                                        <div class="success">✅</div>
+                                        <h1>Payment Successful! 🎉</h1>
+                                        <p><strong>Subscription Activated</strong></p>
+                                        <p>Your {plan} plan is now active.</p>
+                                        <p><strong>Telegram ID:</strong> {user_id}</p>
+                                        <p><strong>Reference:</strong> {reference}</p>
+                                        <p>You can close this window and return to Telegram.</p>
+                                    </div>
+                                </body>
+                                </html>
+                                """
+                                return success_html
+                            else:
+                                # Subscription activation failed
+                                error_html = f"""
+                                <!DOCTYPE html>
+                                <html>
+                                <head>
+                                    <title>Payment Processing - TurnitQ</title>
+                                    <style>
+                                        body {{ font-family: Arial; text-align: center; padding: 50px; }}
+                                        .error {{ color: #ff4444; }}
+                                    </style>
+                                </head>
+                                <body>
+                                    <h1 class="error">⚠️ Activation Failed</h1>
+                                    <p>Your payment was successful but subscription activation failed.</p>
+                                    <p>Please contact support with reference: {reference}</p>
+                                </body>
+                                </html>
+                                """
+                                return error_html
+                        else:
+                            # Invalid plan
+                            error_html = f"""
                             <!DOCTYPE html>
                             <html>
                             <head>
-                                <title>Payment Successful - TurnitQ</title>
-                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                <title>Payment Processing - TurnitQ</title>
                                 <style>
-                                    body {{ 
-                                        font-family: Arial, sans-serif; 
-                                        text-align: center; 
-                                        padding: 20px; 
-                                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                                        color: white;
-                                        min-height: 100vh;
-                                        display: flex;
-                                        align-items: center;
-                                        justify-content: center;
-                                    }}
-                                    .container {{ 
-                                        background: white; 
-                                        padding: 30px; 
-                                        border-radius: 15px; 
-                                        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-                                        color: #333;
-                                        max-width: 500px;
-                                        width: 100%;
-                                    }}
-                                    .success-icon {{ 
-                                        font-size: 60px; 
-                                        color: #4CAF50; 
-                                        margin-bottom: 20px;
-                                    }}
+                                    body {{ font-family: Arial; text-align: center; padding: 50px; }}
+                                    .error {{ color: #ff4444; }}
                                 </style>
                             </head>
                             <body>
-                                <div class="container">
-                                    <div class="success-icon">✅</div>
-                                    <h1>Payment Successful! 🎉</h1>
-                                    <p><strong>Subscription Activated</strong></p>
-                                    <p>Your {plan_data['name']} plan is now active.</p>
-                                    <div style="text-align: left; background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 15px 0;">
-                                        <p><strong>Details:</strong></p>
-                                        <p>Plan: {plan_data['name']}</p>
-                                        <p>Telegram ID: {user_id}</p>
-                                        <p>Reference: {reference}</p>
-                                        <p>Amount: {amount} GHS</p>
-                                    </div>
-                                    <p style="margin-top: 20px; font-size: 14px; color: #666;">
-                                        You can close this window and return to Telegram.
-                                    </p>
-                                </div>
-                                
-                                <script>
-                                    setTimeout(() => {{
-                                        window.close();
-                                    }}, 5000);
-                                </script>
+                                <h1 class="error">⚠️ Invalid Plan</h1>
+                                <p>Your payment was successful but the plan is invalid.</p>
+                                <p>Please contact support with reference: {reference}</p>
                             </body>
                             </html>
                             """
-                            return success_html
-                        else:
-                            return "❌ Subscription activation failed. Please contact support."
-                    else:
-                        return "❌ Payment verification failed. Please contact support."
-                else:
-                    return "❌ Invalid plan. Please contact support."
-                    
-            except (ValueError, TypeError) as e:
-                return f"❌ Invalid Telegram ID: {telegram_id}. Please contact support."
-            except Exception as e:
-                return f"❌ Error processing payment: {str(e)}"
+                            return error_html
+                    except (ValueError, TypeError) as e:
+                        # Invalid Telegram ID
+                        error_html = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <title>Payment Processing - TurnitQ</title>
+                            <style>
+                                body {{ font-family: Arial; text-align: center; padding: 50px; }}
+                                .error {{ color: #ff4444; }}
+                            </style>
+                        </head>
+                        <body>
+                            <h1 class="error">⚠️ Invalid Telegram ID</h1>
+                            <p>Your payment was successful but the Telegram ID is invalid.</p>
+                            <p>Please contact support with reference: {reference}</p>
+                        </body>
+                        </html>
+                        """
+                        return error_html
+                
+                # If we couldn't extract Telegram ID but have reference
+                success_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Payment Successful - TurnitQ</title>
+                    <style>
+                        body {{ font-family: Arial; text-align: center; padding: 50px; background: #f0f8ff; }}
+                        .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                        .success {{ color: #4CAF50; font-size: 48px; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="success">✅</div>
+                        <h1>Payment Successful! 🎉</h1>
+                        <p>Your payment was received successfully.</p>
+                        <p><strong>Reference:</strong> {reference}</p>
+                        <p>Your subscription will be activated automatically via webhook.</p>
+                        <p>You will receive a confirmation message in Telegram shortly.</p>
+                    </div>
+                </body>
+                </html>
+                """
+                return success_html
+            else:
+                # Payment verification failed
+                return """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Payment Failed - TurnitQ</title>
+                    <style>
+                        body { font-family: Arial; text-align: center; padding: 50px; }
+                        .error { color: #ff4444; }
+                    </style>
+                </head>
+                <body>
+                    <h1 class="error">❌ Payment Verification Failed</h1>
+                    <p>Please contact support with your payment details.</p>
+                </body>
+                </html>
+                """
         
-        # If missing some parameters
-        else:
-            missing = []
-            if not reference: missing.append("reference")
-            if not telegram_id: missing.append("telegram_id") 
-            if not plan: missing.append("plan")
-            
-            print(f"❌ Missing parameters: {missing}")
-            
-            error_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Payment Processing - TurnitQ</title>
-                <style>
-                    body {{ font-family: Arial; text-align: center; padding: 50px; }}
-                    .error {{ color: #ff4444; }}
-                </style>
-            </head>
-            <body>
-                <h1 class="error">⚠️ Payment Processing</h1>
-                <p>Your payment was received but we're missing some information.</p>
-                <p>Missing: {', '.join(missing)}</p>
-                <p>Your subscription will be activated automatically via webhook.</p>
-                <p>You will receive a Telegram message shortly.</p>
-            </body>
-            </html>
-            """
-            return error_html
+        # If no reference provided
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Payment Processing - TurnitQ</title>
+            <style>
+                body { font-family: Arial; text-align: center; padding: 50px; }
+            </style>
+        </head>
+        <body>
+            <h1>✅ Payment Received</h1>
+            <p>Your payment was successful!</p>
+            <p>Return to Telegram for subscription status.</p>
+        </body>
+        </html>
+        """
             
     except Exception as e:
         print(f"❌ Payment success error: {e}")
         import traceback
         traceback.print_exc()
         return "❌ An error occurred. Please contact support."
-    
+        
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
     """Manual activation endpoint for users who paid"""
