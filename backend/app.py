@@ -329,7 +329,7 @@ def get_payment_page_url(plan, user_id):
     base_url = payment_pages.get(plan)
     if base_url:
         # Generate a unique reference
-        reference = f"TURNITQ_{user_id}_{int(time.time())}"
+        reference = f"TQ_{user_id}_{plan}_{int(time.time())}"
         
         # Store in database before redirect
         cur = db.cursor()
@@ -948,87 +948,356 @@ def payment_success():
     
     print(f"🎯 Processing payment success with reference: {reference}")
     
-    activation_status = ""
     try:
-        if reference:
-            # Look up payment details from database
-            cur = db.cursor()
-            payment = cur.execute(
-                "SELECT user_id, plan FROM payments WHERE reference=?", 
-                (reference,)
-            ).fetchone()
-            
-            if payment:
-                user_id = payment['user_id']
-                plan = payment['plan']
-                
-                # Activate the subscription
-                expiry_date = activate_user_subscription(user_id, plan)
-                if expiry_date:
-                    # Update payment status
-                    cur.execute(
-                        "UPDATE payments SET status='success', verified_at=? WHERE reference=?",
-                        (now_ts(), reference)
-                    )
-                    db.commit()
-                    
-                    activation_status = f"""
-                    <div class="success-box">
-                        <h3>✅ Subscription Activated Successfully!</h3>
-                        <p>User ID: {user_id}</p>
-                        <p>Plan: {plan.title()}</p>
-                        <p>Expiry: {expiry_date}</p>
-                        <p>You can now use all premium features in Telegram!</p>
+        if not reference:
+            # Return error page if no reference
+            return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Payment Error - TurnitQ</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { 
+                        font-family: Arial, sans-serif; 
+                        text-align: center; 
+                        padding: 20px; 
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
+                    .container { 
+                        background: white; 
+                        padding: 30px; 
+                        border-radius: 15px; 
+                        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                        color: #333;
+                        max-width: 500px;
+                        width: 100%;
+                    }
+                    .error-icon { 
+                        font-size: 60px; 
+                        color: #dc3545; 
+                        margin-bottom: 20px;
+                    }
+                    .error-box {
+                        background: #f8d7da;
+                        padding: 15px;
+                        border-radius: 10px;
+                        margin: 15px 0;
+                        border-left: 4px solid #dc3545;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error-icon">❌</div>
+                    <h1>Payment Error</h1>
+                    <div class="error-box">
+                        <h3>❌ Missing Reference</h3>
+                        <p>No payment reference provided.</p>
+                        <p>Please contact support with your payment details.</p>
                     </div>
-                    """
-                    
-                    # Send confirmation message
-                    plan_data = PLANS[plan]
-                    success_message = (
-                        f"🎉 Payment Successful!\n\n"
-                        f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
-                        f"📅 Expires: {expiry_date}\n"
-                        f"🔓 Daily checks: {plan_data['daily_limit']}\n"
-                        f"💰 Amount: ${plan_data['price']}\n\n"
-                        f"🚀 You can now use all premium features immediately!"
-                    )
-                    send_telegram_message(user_id, success_message)
-                    
-                else:
-                    activation_status = """
+                </div>
+            </body>
+            </html>
+            """, 400
+
+        # Look up payment details from database
+        cur = db.cursor()
+        payment = cur.execute(
+            "SELECT user_id, plan FROM payments WHERE reference=?", 
+            (reference,)
+        ).fetchone()
+        
+        if not payment:
+            return f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Payment Error - TurnitQ</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body {{ 
+                        font-family: Arial, sans-serif; 
+                        text-align: center; 
+                        padding: 20px; 
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }}
+                    .container {{ 
+                        background: white; 
+                        padding: 30px; 
+                        border-radius: 15px; 
+                        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                        color: #333;
+                        max-width: 500px;
+                        width: 100%;
+                    }}
+                    .error-icon {{ 
+                        font-size: 60px; 
+                        color: #dc3545; 
+                        margin-bottom: 20px;
+                    }}
+                    .error-box {{
+                        background: #f8d7da;
+                        padding: 15px;
+                        border-radius: 10px;
+                        margin: 15px 0;
+                        border-left: 4px solid #dc3545;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error-icon">❌</div>
+                    <h1>Payment Error</h1>
+                    <div class="error-box">
+                        <h3>❌ Payment Not Found</h3>
+                        <p>No payment found with reference: {reference}</p>
+                        <p>Please contact support with this reference.</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """, 404
+
+        user_id = payment['user_id']
+        plan = payment['plan']
+        
+        # Activate the subscription
+        expiry_date = activate_user_subscription(user_id, plan)
+        if not expiry_date:
+            return f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Activation Error - TurnitQ</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body {{ 
+                        font-family: Arial, sans-serif; 
+                        text-align: center; 
+                        padding: 20px; 
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }}
+                    .container {{ 
+                        background: white; 
+                        padding: 30px; 
+                        border-radius: 15px; 
+                        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                        color: #333;
+                        max-width: 500px;
+                        width: 100%;
+                    }}
+                    .warning-icon {{ 
+                        font-size: 60px; 
+                        color: #ffc107; 
+                        margin-bottom: 20px;
+                    }}
+                    .warning-box {{
+                        background: #fff3cd;
+                        padding: 15px;
+                        border-radius: 10px;
+                        margin: 15px 0;
+                        border-left: 4px solid #ffc107;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="warning-icon">⚠️</div>
+                    <h1>Activation Pending</h1>
                     <div class="warning-box">
                         <h3>⚠️ Activation Failed</h3>
                         <p>Payment was successful but activation failed.</p>
-                        <p>Please contact support with your reference.</p>
+                        <p>User ID: {user_id}</p>
+                        <p>Plan: {plan}</p>
+                        <p>Reference: {reference}</p>
+                        <p>Please contact support with the details above.</p>
                     </div>
-                    """
-            else:
-                activation_status = """
-                <div class="error-box">
-                    <h3>❌ Payment Not Found</h3>
-                    <p>No payment found with reference: {reference}</p>
-                    <p>Please contact support.</p>
                 </div>
-                """
-        else:
-            activation_status = """
-            <div class="error-box">
-                <h3>❌ Missing Reference</h3>
-                <p>No payment reference provided.</p>
-                <p>Please contact support.</p>
+            </body>
+            </html>
+            """, 500
+
+        # Update payment status
+        cur.execute(
+            "UPDATE payments SET status='success', verified_at=? WHERE reference=?",
+            (now_ts(), reference)
+        )
+        db.commit()
+        
+        # Send confirmation message
+        plan_data = PLANS[plan]
+        success_message = (
+            f"🎉 Payment Successful!\n\n"
+            f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
+            f"📅 Expires: {expiry_date}\n"
+            f"🔓 Daily checks: {plan_data['daily_limit']}\n"
+            f"💰 Amount: ${plan_data['price']}\n\n"
+            f"🚀 You can now use all premium features immediately!"
+        )
+        send_telegram_message(user_id, success_message)
+
+        # SUCCESS HTML
+        success_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Payment Successful - TurnitQ</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {{ 
+                    font-family: Arial, sans-serif; 
+                    text-align: center; 
+                    padding: 20px; 
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    min-height: 100vh;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }}
+                .container {{ 
+                    background: white; 
+                    padding: 30px; 
+                    border-radius: 15px; 
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                    color: #333;
+                    max-width: 500px;
+                    width: 100%;
+                }}
+                .success-icon {{ 
+                    font-size: 60px; 
+                    color: #4CAF50; 
+                    margin-bottom: 20px;
+                }}
+                .success-box {{
+                    background: #d4edda;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin: 15px 0;
+                    border-left: 4px solid #4CAF50;
+                }}
+                .info-box {{
+                    background: #e7f3ff;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin: 15px 0;
+                    border-left: 4px solid #007bff;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="success-icon">✅</div>
+                <h1>Payment Successful! 🎉</h1>
+                
+                <div class="success-box">
+                    <h3>✅ Subscription Activated Successfully!</h3>
+                    <p>User ID: {user_id}</p>
+                    <p>Plan: {plan.title()}</p>
+                    <p>Expiry: {expiry_date}</p>
+                    <p>You can now use all premium features in Telegram!</p>
+                </div>
+
+                <div class="info-box">
+                    <p><strong>Payment Details:</strong></p>
+                    <p>Reference: {reference}</p>
+                    <p>Telegram ID: {user_id}</p>
+                    <p>Plan: {plan}</p>
+                </div>
+                
+                <p style="margin-top: 20px; font-size: 14px; color: #666;">
+                    You can close this window and return to Telegram.
+                </p>
             </div>
-            """
             
-    except Exception as e:
-        activation_status = f"""
-        <div class="error-box">
-            <h3>❌ Activation Error</h3>
-            <p>Error: {str(e)}</p>
-            <p>Please contact support with your reference: {reference}</p>
-        </div>
+            <script>
+                // Auto-close after 5 seconds
+                setTimeout(() => {{ window.close(); }}, 5000);
+            </script>
+        </body>
+        </html>
         """
-    
-    # ... rest of your HTML template ...
+        
+        return success_html
+
+    except Exception as e:
+        print(f"❌ Payment success error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # ERROR HTML
+        error_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>System Error - TurnitQ</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {{ 
+                    font-family: Arial, sans-serif; 
+                    text-align: center; 
+                    padding: 20px; 
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    min-height: 100vh;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }}
+                .container {{ 
+                    background: white; 
+                    padding: 30px; 
+                    border-radius: 15px; 
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                    color: #333;
+                    max-width: 500px;
+                    width: 100%;
+                }}
+                .error-icon {{ 
+                    font-size: 60px; 
+                    color: #dc3545; 
+                    margin-bottom: 20px;
+                }}
+                .error-box {{
+                    background: #f8d7da;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin: 15px 0;
+                    border-left: 4px solid #dc3545;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="error-icon">❌</div>
+                <h1>System Error</h1>
+                <div class="error-box">
+                    <h3>❌ Activation Error</h3>
+                    <p>Error: {str(e)}</p>
+                    <p>Reference: {reference}</p>
+                    <p>Please contact support with the details above.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return error_html, 500
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
     """Manual activation endpoint for users who paid"""
