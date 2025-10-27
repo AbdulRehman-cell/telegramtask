@@ -1034,7 +1034,7 @@ def payment_success():
             <div class="instructions">
                 <h3>📋 How to find your Telegram ID:</h3>
                 <ol>
-                    <li>Open Telegram and message <strong>@userinfobot</strong></li>
+                    <li>Open Telegram and message <strong>/id</strong></li>
                     <li>Copy your numeric ID number</li>
                     <li>Paste it in the field above</li>
                     <li>Click "Activate Subscription"</li>
@@ -1160,7 +1160,7 @@ def activate_subscription():
                     <p>✅ The user has been notified on Telegram.</p>
                     <p>🚀 They can now use all premium features!</p>
                     
-                    <a href="/payment-success?plan={plan}" class="btn">Activate Another Subscription</a>
+                    <a href="https://t.me/turnitQbot" class="btn">Back to Telegram</a>
                     
                     <p class="info-text">You can close this window now.</p>
                 </div>
