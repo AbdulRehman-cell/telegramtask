@@ -939,7 +939,7 @@ def payment_success():
         if reference and telegram_id and plan:
             try:
                 user_id = int(telegram_id)
-                
+                expiry_date = activate_user_subscription(user_id, plan)
                 # Verify this is a valid plan
                 if plan in PLANS:
                     # First verify the payment with Paystack
@@ -949,7 +949,7 @@ def payment_success():
                         amount = verification_result.get('amount', 0) / 100
                         
                         # ACTIVATE SUBSCRIPTION IMMEDIATELY
-                        expiry_date = activate_user_subscription(user_id, plan)
+                        
                         
                         if expiry_date:
                             # Store payment record
