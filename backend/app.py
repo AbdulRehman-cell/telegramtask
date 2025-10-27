@@ -319,7 +319,7 @@ def create_inline_keyboard(buttons):
 
 # PAYSTACK PAYMENT PAGE INTEGRATION - FIXED
 def get_payment_page_url(plan, user_id):
-    """Get Paystack payment page URL with Telegram ID"""
+    """Store payment details in database before redirecting"""
     payment_pages = {
         "premium": "https://paystack.shop/pay/premiumpage",
         "pro": "https://paystack.shop/pay/propage", 
@@ -328,11 +328,53 @@ def get_payment_page_url(plan, user_id):
     
     base_url = payment_pages.get(plan)
     if base_url:
-        # The callback URL is now configured in Paystack dashboard
-        # So we just return the basic payment page URL
-        print(f"🔗 Payment page for {plan}: {base_url}")
-        return base_url
+        # Generate a unique reference
+        reference = f"TURNITQ_{user_id}_{int(time.time())}"
+        
+        # Store in database before redirect
+        cur = db.cursor()
+        cur.execute(
+            "INSERT INTO payments (user_id, plan, amount, reference, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, plan, PLANS[plan]['price'], reference, 'pending', now_ts())
+        )
+        db.commit()
+        
+        success_url = f"{WEBHOOK_BASE_URL}/payment-success"
+        return f"{base_url}?reference={reference}&success_url={success_url}"
     return None
+def handle_payment_selection(user_id, plan):
+    """Handle payment selection with automatic activation setup"""
+    plan_data = PLANS[plan]
+    
+    # Get payment page URL with Telegram ID
+    payment_url = get_payment_page_url(plan, user_id)
+    
+    if payment_url:
+        # Create inline keyboard with payment link
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": f"💰 Pay ${plan_data['price']}", "url": payment_url}],
+                [{"text": "📋 Plan Features", "callback_data": f"plan_details_{plan}"}],
+                [{"text": "🔄 Refresh Status", "callback_data": f"refresh_payment_{user_id}_{plan}"}]
+            ]
+        }
+        
+        payment_message = (
+            f"💳 {plan_data['name']} Plan - ${plan_data['price']}\n\n"
+            f"✨ Features:\n" +
+            "\n".join(f"• {feature}" for feature in plan_data["features"]) +
+            f"\n\n🚀 Automatic Activation:\n"
+            f"• Click 'Pay Now' to complete payment\n"
+            f"• Your subscription activates INSTANTLY\n"
+            f"• No manual steps required\n\n"
+            f"🔑 Your Telegram ID: <code>{user_id}</code>\n"
+            f"📝 Make sure this ID appears in the payment form\n\n"
+            f"Click below to start:"
+        )
+        
+        send_telegram_message(user_id, payment_message, reply_markup=keyboard)
+    else:
+        send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
 
 def handle_payment_selection(user_id, plan):
     """Handle payment selection with automatic activation setup"""
@@ -367,33 +409,6 @@ def handle_payment_selection(user_id, plan):
         send_telegram_message(user_id, payment_message, reply_markup=keyboard)
     else:
         send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
-
-def verify_paystack_payment(reference):
-    """Verify payment with Paystack API"""
-    try:
-        url = f"https://api.paystack.co/transaction/verify/{reference}"
-        headers = {
-            "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.get(url, headers=headers)
-        result = response.json()
-        
-        if result.get('status') and result['data'].get('status') == 'success':
-            return {
-                "status": True,
-                "amount": result['data'].get('amount', 0),
-                "currency": result['data'].get('currency', 'GHS'),
-                "plan": result['data'].get('metadata', {}).get('plan', '')
-            }
-        else:
-            print(f"❌ Payment verification failed: {result}")
-            return {"status": False}
-            
-    except Exception as e:
-        print(f"❌ Payment verification error: {e}")
-        return {"status": False}
 
 def activate_user_subscription(user_id, plan):
     """Activate user's subscription after successful payment"""
@@ -925,255 +940,95 @@ def debug():
     <p><strong>Successful Payments:</strong> {payment_count}</p>
     <p><strong>Status:</strong> 🟢 Automatic Fallback & Payments Active</p>
     """
-
+#hello
 @app.route("/payment-success")
 def payment_success():
-    """Handle payment success redirect - extract Telegram ID from reference"""
+    """Extract Telegram ID from database using reference"""
+    reference = request.args.get('reference', '')
+    
+    print(f"🎯 Processing payment success with reference: {reference}")
+    
+    activation_status = ""
     try:
-        # Get parameters from URL
-        reference = request.args.get('reference', '')
-        
-        print(f"🎯 Payment Success - Reference: {reference}")
-        print(f"🔍 Full URL: {request.url}")
-        
-        # If we have reference, extract Telegram ID and plan from Paystack API
         if reference:
-            print(f"🔄 Extracting payment details from reference: {reference}")
+            # Look up payment details from database
+            cur = db.cursor()
+            payment = cur.execute(
+                "SELECT user_id, plan FROM payments WHERE reference=?", 
+                (reference,)
+            ).fetchone()
             
-            # Verify payment and get all data from Paystack
-            verification_result = verify_paystack_payment(reference)
-            
-            if verification_result.get('status'):
-                payment_data = verification_result.get('data', {})
-                custom_fields = payment_data.get('custom_fields', [])
-                metadata = payment_data.get('metadata', {})
-                amount = payment_data.get('amount', 0) / 100
+            if payment:
+                user_id = payment['user_id']
+                plan = payment['plan']
                 
-                print(f"💰 Payment verified - Amount: ${amount}")
-                print(f"📋 Custom fields: {custom_fields}")
-                print(f"📝 Metadata: {metadata}")
-                
-                # Extract Telegram ID from custom fields
-                telegram_id = None
-                plan = None
-                
-                for field in custom_fields:
-                    variable_name = field.get('variable_name', '').lower()
-                    value = field.get('value', '')
+                # Activate the subscription
+                expiry_date = activate_user_subscription(user_id, plan)
+                if expiry_date:
+                    # Update payment status
+                    cur.execute(
+                        "UPDATE payments SET status='success', verified_at=? WHERE reference=?",
+                        (now_ts(), reference)
+                    )
+                    db.commit()
                     
-                    if any(keyword in variable_name for keyword in ['telegram', 'telegram_id', 'telegramid', 'tg_id', 'tgid']):
-                        telegram_id = value
-                        print(f"✅ Extracted Telegram ID from custom field: {telegram_id}")
-                    
-                    if any(keyword in variable_name for keyword in ['plan', 'subscription', 'package']):
-                        plan = value
-                        print(f"✅ Extracted plan from custom field: {plan}")
-                
-                # If not found in custom fields, check metadata
-                if not telegram_id:
-                    telegram_id = metadata.get('telegram_id') or metadata.get('telegram_user_id')
-                    if telegram_id:
-                        print(f"✅ Extracted Telegram ID from metadata: {telegram_id}")
-                
-                if not plan:
-                    plan = metadata.get('plan')
-                    if plan:
-                        print(f"✅ Extracted plan from metadata: {plan}")
-                
-                # If still no plan, determine from amount
-                if not plan:
-                    plan_data = {8: 'premium', 29: 'pro', 79: 'elite'}
-                    closest_plan = min(plan_data.keys(), key=lambda x: abs(x - amount))
-                    if abs(amount - closest_plan) <= 5:
-                        plan = plan_data[closest_plan]
-                        print(f"💰 Inferred plan from amount: {plan} (${amount})")
-                
-                print(f"🔍 Final extraction - Telegram ID: {telegram_id}, Plan: {plan}")
-                
-                # If we have all required information, activate subscription
-                if telegram_id and plan:
-                    try:
-                        user_id = int(telegram_id)
-                        
-                        if plan in PLANS:
-                            # ACTIVATE SUBSCRIPTION
-                            expiry_date = activate_user_subscription(user_id, plan)
-                            
-                            if expiry_date:
-                                # Store payment record
-                                cur = db.cursor()
-                                cur.execute(
-                                    "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                    (user_id, plan, amount, reference, 'success', now_ts(), now_ts())
-                                )
-                                db.commit()
-                                
-                                # Send confirmation to user
-                                plan_data = PLANS[plan]
-                                success_message = (
-                                    f"🎉 Payment Successful & Activated!\n\n"
-                                    f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
-                                    f"📅 Expires: {expiry_date}\n"
-                                    f"🔓 Daily checks: {plan_data['daily_limit']}\n"
-                                    f"💰 Amount: {amount} GHS\n\n"
-                                    f"🚀 You can now use all premium features immediately!"
-                                )
-                                send_telegram_message(user_id, success_message)
-                                
-                                success_html = f"""
-                                <!DOCTYPE html>
-                                <html>
-                                <head>
-                                    <title>Payment Successful - TurnitQ</title>
-                                    <style>
-                                        body {{ font-family: Arial; text-align: center; padding: 50px; background: #f0f8ff; }}
-                                        .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-                                        .success {{ color: #4CAF50; font-size: 48px; }}
-                                    </style>
-                                </head>
-                                <body>
-                                    <div class="container">
-                                        <div class="success">✅</div>
-                                        <h1>Payment Successful! 🎉</h1>
-                                        <p><strong>Subscription Activated</strong></p>
-                                        <p>Your {plan} plan is now active.</p>
-                                        <p><strong>Telegram ID:</strong> {user_id}</p>
-                                        <p><strong>Reference:</strong> {reference}</p>
-                                        <p>You can close this window and return to Telegram.</p>
-                                    </div>
-                                </body>
-                                </html>
-                                """
-                                return success_html
-                            else:
-                                # Subscription activation failed
-                                error_html = f"""
-                                <!DOCTYPE html>
-                                <html>
-                                <head>
-                                    <title>Payment Processing - TurnitQ</title>
-                                    <style>
-                                        body {{ font-family: Arial; text-align: center; padding: 50px; }}
-                                        .error {{ color: #ff4444; }}
-                                    </style>
-                                </head>
-                                <body>
-                                    <h1 class="error">⚠️ Activation Failed</h1>
-                                    <p>Your payment was successful but subscription activation failed.</p>
-                                    <p>Please contact support with reference: {reference}</p>
-                                </body>
-                                </html>
-                                """
-                                return error_html
-                        else:
-                            # Invalid plan
-                            error_html = f"""
-                            <!DOCTYPE html>
-                            <html>
-                            <head>
-                                <title>Payment Processing - TurnitQ</title>
-                                <style>
-                                    body {{ font-family: Arial; text-align: center; padding: 50px; }}
-                                    .error {{ color: #ff4444; }}
-                                </style>
-                            </head>
-                            <body>
-                                <h1 class="error">⚠️ Invalid Plan</h1>
-                                <p>Your payment was successful but the plan is invalid.</p>
-                                <p>Please contact support with reference: {reference}</p>
-                            </body>
-                            </html>
-                            """
-                            return error_html
-                    except (ValueError, TypeError) as e:
-                        # Invalid Telegram ID
-                        error_html = f"""
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                            <title>Payment Processing - TurnitQ</title>
-                            <style>
-                                body {{ font-family: Arial; text-align: center; padding: 50px; }}
-                                .error {{ color: #ff4444; }}
-                            </style>
-                        </head>
-                        <body>
-                            <h1 class="error">⚠️ Invalid Telegram ID</h1>
-                            <p>Your payment was successful but the Telegram ID is invalid.</p>
-                            <p>Please contact support with reference: {reference}</p>
-                        </body>
-                        </html>
-                        """
-                        return error_html
-                
-                # If we couldn't extract Telegram ID but have reference
-                success_html = f"""
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Payment Successful - TurnitQ</title>
-                    <style>
-                        body {{ font-family: Arial; text-align: center; padding: 50px; background: #f0f8ff; }}
-                        .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-                        .success {{ color: #4CAF50; font-size: 48px; }}
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="success">✅</div>
-                        <h1>Payment Successful! 🎉</h1>
-                        <p>Your payment was received successfully.</p>
-                        <p><strong>Reference:</strong> {reference}</p>
-                        <p>Your subscription will be activated automatically via webhook.</p>
-                        <p>You will receive a confirmation message in Telegram shortly.</p>
+                    activation_status = f"""
+                    <div class="success-box">
+                        <h3>✅ Subscription Activated Successfully!</h3>
+                        <p>User ID: {user_id}</p>
+                        <p>Plan: {plan.title()}</p>
+                        <p>Expiry: {expiry_date}</p>
+                        <p>You can now use all premium features in Telegram!</p>
                     </div>
-                </body>
-                </html>
-                """
-                return success_html
+                    """
+                    
+                    # Send confirmation message
+                    plan_data = PLANS[plan]
+                    success_message = (
+                        f"🎉 Payment Successful!\n\n"
+                        f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
+                        f"📅 Expires: {expiry_date}\n"
+                        f"🔓 Daily checks: {plan_data['daily_limit']}\n"
+                        f"💰 Amount: ${plan_data['price']}\n\n"
+                        f"🚀 You can now use all premium features immediately!"
+                    )
+                    send_telegram_message(user_id, success_message)
+                    
+                else:
+                    activation_status = """
+                    <div class="warning-box">
+                        <h3>⚠️ Activation Failed</h3>
+                        <p>Payment was successful but activation failed.</p>
+                        <p>Please contact support with your reference.</p>
+                    </div>
+                    """
             else:
-                # Payment verification failed
-                return """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Payment Failed - TurnitQ</title>
-                    <style>
-                        body { font-family: Arial; text-align: center; padding: 50px; }
-                        .error { color: #ff4444; }
-                    </style>
-                </head>
-                <body>
-                    <h1 class="error">❌ Payment Verification Failed</h1>
-                    <p>Please contact support with your payment details.</p>
-                </body>
-                </html>
+                activation_status = """
+                <div class="error-box">
+                    <h3>❌ Payment Not Found</h3>
+                    <p>No payment found with reference: {reference}</p>
+                    <p>Please contact support.</p>
+                </div>
                 """
-        
-        # If no reference provided
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Payment Processing - TurnitQ</title>
-            <style>
-                body { font-family: Arial; text-align: center; padding: 50px; }
-            </style>
-        </head>
-        <body>
-            <h1>✅ Payment Received</h1>
-            <p>Your payment was successful!</p>
-            <p>Return to Telegram for subscription status.</p>
-        </body>
-        </html>
-        """
+        else:
+            activation_status = """
+            <div class="error-box">
+                <h3>❌ Missing Reference</h3>
+                <p>No payment reference provided.</p>
+                <p>Please contact support.</p>
+            </div>
+            """
             
     except Exception as e:
-        print(f"❌ Payment success error: {e}")
-        import traceback
-        traceback.print_exc()
-        return "❌ An error occurred. Please contact support."
-        
+        activation_status = f"""
+        <div class="error-box">
+            <h3>❌ Activation Error</h3>
+            <p>Error: {str(e)}</p>
+            <p>Please contact support with your reference: {reference}</p>
+        </div>
+        """
+    
+    # ... rest of your HTML template ...
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
     """Manual activation endpoint for users who paid"""
@@ -1261,6 +1116,7 @@ def paystack_webhook():
         event = data.get('event')
         
         print(f"📨 Received Paystack webhook: {event}")
+        print(f"📊 Full webhook data: {json.dumps(data, indent=2)}")
         
         if event == 'charge.success':
             payment_data = data.get('data', {})
@@ -1272,17 +1128,20 @@ def paystack_webhook():
             
             print(f"💰 Payment successful - Reference: {reference}, Amount: ${amount}")
             print(f"📧 Customer email: {customer_email}")
+            print(f"📋 Custom fields: {custom_fields}")
+            print(f"📝 Metadata: {metadata}")
             
             # Extract user info from multiple sources
             user_id = None
             plan = None
             
-            # METHOD 1: Extract from custom_fields
+            # METHOD 1: Extract from custom_fields (Primary method for payment pages)
             for field in custom_fields:
+                print(f"🔍 Checking field: {field}")
                 variable_name = field.get('variable_name', '').lower()
                 value = field.get('value', '')
                 
-                if 'telegram' in variable_name:
+                if 'telegram' in variable_name or 'telegram' in str(value):
                     user_id = value
                     print(f"✅ Found Telegram ID in custom field: {user_id}")
                 
@@ -1408,6 +1267,8 @@ def paystack_webhook():
             else:
                 print(f"❌ Missing user_id or plan in webhook")
                 print(f"User ID: {user_id}, Plan: {plan}")
+                print(f"Custom fields: {custom_fields}")
+                print(f"Metadata: {metadata}")
                 
                 # Log this for debugging
                 cur = db.cursor()
@@ -1421,6 +1282,7 @@ def paystack_webhook():
         
         elif event == 'charge.failed':
             print(f"❌ Payment failed: {data}")
+            # You could notify the user here if you have their ID
             return jsonify({"status": "payment_failed"}), 200
             
         else:
