@@ -326,7 +326,7 @@ def get_payment_page_url(plan, user_id):
         "elite": "https://paystack.shop/pay/elitepage"
     }
     
-    base_url = payment_pages.get(plan)
+    base_url = payment_pages.get(user_id)
     if base_url:
         # The callback URL is now configured in Paystack dashboard
         # So we just return the basic payment page URL
