@@ -1082,7 +1082,8 @@ def payment_success():
         </script>
     </body>
     </html>
-    """@app.route("/manual-activate", methods=['GET', 'POST'])
+    """
+@app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
     """Manual activation endpoint for users who paid"""
     if request.method == 'GET':
