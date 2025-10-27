@@ -319,7 +319,7 @@ def create_inline_keyboard(buttons):
 
 # PAYSTACK PAYMENT PAGE INTEGRATION - FIXED
 def get_payment_page_url(plan, user_id):
-    """Get Paystack payment page URL with Telegram ID in callback"""
+    """Get Paystack payment page URL with Telegram ID"""
     payment_pages = {
         "premium": "https://paystack.shop/pay/premiumpage",
         "pro": "https://paystack.shop/pay/propage", 
@@ -328,8 +328,10 @@ def get_payment_page_url(plan, user_id):
     
     base_url = payment_pages.get(plan)
     if base_url:
-        # Add Telegram ID and plan as URL parameters
-        return f"{base_url}?callback={WEBHOOK_BASE_URL}/payment-success&telegram_id={user_id}&plan={plan}"
+        # The callback URL is now configured in Paystack dashboard
+        # So we just return the basic payment page URL
+        print(f"🔗 Payment page for {plan}: {base_url}")
+        return base_url
     return None
 
 def handle_payment_selection(user_id, plan):
@@ -926,30 +928,32 @@ def debug():
 
 @app.route("/payment-success")
 def payment_success():
-    """Handle payment success redirect and activate subscription"""
+    """Handle payment success redirect with all parameters"""
     try:
-        # Get parameters from redirect URL
+        # Get all parameters from URL
         reference = request.args.get('reference', '')
         telegram_id = request.args.get('telegram_id', '')
         plan = request.args.get('plan', '')
         
-        print(f"🎯 Payment Success Redirect - Reference: {reference}, Telegram ID: {telegram_id}, Plan: {plan}")
+        print(f"🎯 Payment Success - Reference: {reference}, Telegram ID: {telegram_id}, Plan: {plan}")
         
-        # If we have all required parameters, activate subscription immediately
+        # Check if we have all required parameters
         if reference and telegram_id and plan:
+            print("✅ All parameters received! Activating subscription...")
+            
             try:
                 user_id = int(telegram_id)
-                expiry_date = activate_user_subscription(user_id, plan)
+                
                 # Verify this is a valid plan
                 if plan in PLANS:
-                    # First verify the payment with Paystack
+                    # Verify payment with Paystack
                     verification_result = verify_paystack_payment(reference)
                     
                     if verification_result.get('status'):
                         amount = verification_result.get('amount', 0) / 100
                         
-                        # ACTIVATE SUBSCRIPTION IMMEDIATELY
-                        
+                        # ACTIVATE SUBSCRIPTION
+                        expiry_date = activate_user_subscription(user_id, plan)
                         
                         if expiry_date:
                             # Store payment record
@@ -1005,41 +1009,27 @@ def payment_success():
                                         color: #4CAF50; 
                                         margin-bottom: 20px;
                                     }}
-                                    .info-box {{
-                                        background: #d4edda;
-                                        padding: 15px;
-                                        border-radius: 10px;
-                                        margin: 15px 0;
-                                        border-left: 4px solid #4CAF50;
-                                    }}
                                 </style>
                             </head>
                             <body>
                                 <div class="container">
                                     <div class="success-icon">✅</div>
                                     <h1>Payment Successful! 🎉</h1>
-                                    
-                                    <div class="info-box">
-                                        <h3>🚀 Subscription Activated!</h3>
-                                        <p>Your {plan_data['name']} plan has been activated successfully.</p>
-                                        <p>You can close this window and return to Telegram.</p>
-                                    </div>
-
+                                    <p><strong>Subscription Activated</strong></p>
+                                    <p>Your {plan_data['name']} plan is now active.</p>
                                     <div style="text-align: left; background: #f8f9fa; padding: 15px; border-radius: 10px; margin: 15px 0;">
-                                        <p><strong>Payment Details:</strong></p>
-                                        <p>Reference: {reference}</p>
-                                        <p>Telegram ID: {telegram_id}</p>
+                                        <p><strong>Details:</strong></p>
                                         <p>Plan: {plan_data['name']}</p>
+                                        <p>Telegram ID: {user_id}</p>
+                                        <p>Reference: {reference}</p>
                                         <p>Amount: {amount} GHS</p>
                                     </div>
-                                    
                                     <p style="margin-top: 20px; font-size: 14px; color: #666;">
-                                        You should receive a confirmation message in Telegram shortly.
+                                        You can close this window and return to Telegram.
                                     </p>
                                 </div>
                                 
                                 <script>
-                                    // Auto-close after 5 seconds
                                     setTimeout(() => {{
                                         window.close();
                                     }}, 5000);
@@ -1049,78 +1039,53 @@ def payment_success():
                             """
                             return success_html
                         else:
-                            return "Subscription activation failed. Please contact support."
+                            return "❌ Subscription activation failed. Please contact support."
                     else:
-                        return "Payment verification failed. Please contact support."
+                        return "❌ Payment verification failed. Please contact support."
                 else:
-                    return "Invalid plan. Please contact support."
+                    return "❌ Invalid plan. Please contact support."
                     
             except (ValueError, TypeError) as e:
-                return f"Invalid Telegram ID format. Please contact support."
+                return f"❌ Invalid Telegram ID: {telegram_id}. Please contact support."
             except Exception as e:
-                return f"Error processing payment: {str(e)}"
+                return f"❌ Error processing payment: {str(e)}"
         
-        # If missing parameters, show generic success page
-        success_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Payment Successful - TurnitQ</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                body {{ 
-                    font-family: Arial, sans-serif; 
-                    text-align: center; 
-                    padding: 20px; 
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    min-height: 100vh;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }}
-                .container {{ 
-                    background: white; 
-                    padding: 30px; 
-                    border-radius: 15px; 
-                    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-                    color: #333;
-                    max-width: 500px;
-                    width: 100%;
-                }}
-                .success-icon {{ 
-                    font-size: 60px; 
-                    color: #4CAF50; 
-                    margin-bottom: 20px;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="success-icon">✅</div>
-                <h1>Payment Successful! 🎉</h1>
-                <p>Thank you for your payment. Your subscription is being processed.</p>
-                <p>You will receive a confirmation message in Telegram shortly.</p>
-                <p style="margin-top: 20px; font-size: 14px; color: #666;">
-                    You can close this window and return to Telegram.
-                </p>
-            </div>
+        # If missing some parameters
+        else:
+            missing = []
+            if not reference: missing.append("reference")
+            if not telegram_id: missing.append("telegram_id") 
+            if not plan: missing.append("plan")
             
-            <script>
-                // Auto-close after 5 seconds
-                setTimeout(() => {{
-                    window.close();
-                }}, 5000);
-            </script>
-        </body>
-        </html>
-        """
-        return success_html
-        
+            print(f"❌ Missing parameters: {missing}")
+            
+            error_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Payment Processing - TurnitQ</title>
+                <style>
+                    body {{ font-family: Arial; text-align: center; padding: 50px; }}
+                    .error {{ color: #ff4444; }}
+                </style>
+            </head>
+            <body>
+                <h1 class="error">⚠️ Payment Processing</h1>
+                <p>Your payment was received but we're missing some information.</p>
+                <p>Missing: {', '.join(missing)}</p>
+                <p>Your subscription will be activated automatically via webhook.</p>
+                <p>You will receive a Telegram message shortly.</p>
+            </body>
+            </html>
+            """
+            return error_html
+            
     except Exception as e:
         print(f"❌ Payment success error: {e}")
-        return "An error occurred. Please contact support."
-
+        import traceback
+        traceback.print_exc()
+        return "❌ An error occurred. Please contact support."
+    
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
     """Manual activation endpoint for users who paid"""
