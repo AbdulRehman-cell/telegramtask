@@ -937,19 +937,138 @@ def payment_success():
     
     # Show simple form to enter Telegram ID
     return f'''
-    <h2>Activate TurnitQ Subscription</h2>
-    <p><strong>Plan Selected:</strong> {plan}</p>
-    <form method="POST" action="/activate-subscription">
-        <p>Telegram User ID: <input type="number" name="user_id" required></p>
-        <input type="hidden" name="plan" value="{plan}">
-        <input type="hidden" name="reference" value="payment_page">
-        <button type="submit">Activate Subscription</button>
-    </form>
-    
-    <p><strong>How to find your Telegram ID:</strong></p>
-    <p>1. Message @userinfobot on Telegram</p>
-    <p>2. Copy your ID number</p>
-    <p>3. Paste it above and click "Activate Subscription"</p>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Activate Subscription - TurnitQ</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{
+                font-family: 'Arial', sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                margin: 0;
+                padding: 20px;
+                min-height: 100vh;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }}
+            .container {{
+                background: white;
+                padding: 40px;
+                border-radius: 15px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                max-width: 500px;
+                width: 100%;
+            }}
+            .header {{
+                text-align: center;
+                margin-bottom: 30px;
+            }}
+            .header h2 {{
+                color: #333;
+                margin-bottom: 10px;
+                font-size: 28px;
+            }}
+            .plan-badge {{
+                background: #4CAF50;
+                color: white;
+                padding: 8px 16px;
+                border-radius: 20px;
+                font-weight: bold;
+                display: inline-block;
+                margin: 10px 0;
+            }}
+            .form-group {{
+                margin-bottom: 25px;
+            }}
+            label {{
+                display: block;
+                margin-bottom: 8px;
+                font-weight: bold;
+                color: #555;
+            }}
+            input[type="number"] {{
+                width: 100%;
+                padding: 12px 15px;
+                border: 2px solid #ddd;
+                border-radius: 8px;
+                font-size: 16px;
+                box-sizing: border-box;
+                transition: border-color 0.3s;
+            }}
+            input[type="number"]:focus {{
+                border-color: #4CAF50;
+                outline: none;
+            }}
+            button {{
+                background: #4CAF50;
+                color: white;
+                border: none;
+                padding: 15px 30px;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+                cursor: pointer;
+                width: 100%;
+                transition: background 0.3s;
+            }}
+            button:hover {{
+                background: #45a049;
+            }}
+            .instructions {{
+                background: #f8f9fa;
+                padding: 20px;
+                border-radius: 8px;
+                border-left: 4px solid #007bff;
+                margin-top: 25px;
+            }}
+            .instructions h3 {{
+                margin-top: 0;
+                color: #333;
+            }}
+            .instructions ol {{
+                padding-left: 20px;
+                margin-bottom: 0;
+            }}
+            .instructions li {{
+                margin-bottom: 8px;
+                color: #555;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h2>🎉 Payment Successful!</h2>
+                <div class="plan-badge">Plan: {plan.upper()}</div>
+            </div>
+            
+            <form method="POST" action="/activate-subscription">
+                <div class="form-group">
+                    <label for="user_id">Your Telegram ID:</label>
+                    <input type="number" id="user_id" name="user_id" required 
+                           placeholder="Enter your Telegram ID (e.g., 123456789)">
+                </div>
+                
+                <input type="hidden" name="plan" value="{plan}">
+                <input type="hidden" name="reference" value="payment_page">
+                
+                <button type="submit">🚀 Activate Subscription</button>
+            </form>
+            
+            <div class="instructions">
+                <h3>📋 How to find your Telegram ID:</h3>
+                <ol>
+                    <li>Open Telegram and message <strong>@userinfobot</strong></li>
+                    <li>Copy your numeric ID number</li>
+                    <li>Paste it in the field above</li>
+                    <li>Click "Activate Subscription"</li>
+                </ol>
+            </div>
+        </div>
+    </body>
+    </html>
     '''
 
 
@@ -985,17 +1104,224 @@ def activate_subscription():
             send_telegram_message(user_id, success_message)
             
             return f'''
-            <h2>✅ Subscription Activated!</h2>
-            <p>User {user_id} has been upgraded to {plan} plan.</p>
-            <p>Expiry: {expiry_date}</p>
-            <p>They have been notified on Telegram.</p>
-            <p><a href="/payment-success?plan={plan}">Activate Another</a></p>
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Subscription Activated - TurnitQ</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body {{
+                        font-family: 'Arial', sans-serif;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        margin: 0;
+                        padding: 20px;
+                        min-height: 100vh;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                    }}
+                    .container {{
+                        background: white;
+                        padding: 40px;
+                        border-radius: 15px;
+                        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                        max-width: 500px;
+                        width: 100%;
+                        text-align: center;
+                    }}
+                    .success-icon {{
+                        font-size: 80px;
+                        color: #4CAF50;
+                        margin-bottom: 20px;
+                    }}
+                    h2 {{
+                        color: #333;
+                        margin-bottom: 20px;
+                    }}
+                    .success-box {{
+                        background: #d4edda;
+                        padding: 20px;
+                        border-radius: 10px;
+                        border-left: 4px solid #4CAF50;
+                        margin: 20px 0;
+                        text-align: left;
+                    }}
+                    .success-box p {{
+                        margin: 8px 0;
+                        color: #155724;
+                    }}
+                    .btn {{
+                        display: inline-block;
+                        background: #4CAF50;
+                        color: white;
+                        padding: 12px 25px;
+                        text-decoration: none;
+                        border-radius: 8px;
+                        font-weight: bold;
+                        margin-top: 20px;
+                        transition: background 0.3s;
+                    }}
+                    .btn:hover {{
+                        background: #45a049;
+                    }}
+                    .info-text {{
+                        color: #666;
+                        font-size: 14px;
+                        margin-top: 25px;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="success-icon">✅</div>
+                    <h2>Subscription Activated Successfully!</h2>
+                    
+                    <div class="success-box">
+                        <p><strong>User ID:</strong> {user_id}</p>
+                        <p><strong>Plan:</strong> {plan.upper()}</p>
+                        <p><strong>Expiry Date:</strong> {expiry_date}</p>
+                        <p><strong>Daily Checks:</strong> {PLANS[plan]['daily_limit']}</p>
+                    </div>
+                    
+                    <p>✅ The user has been notified on Telegram.</p>
+                    <p>🚀 They can now use all premium features!</p>
+                    
+                    <a href="/payment-success?plan={plan}" class="btn">Activate Another Subscription</a>
+                    
+                    <p class="info-text">You can close this window now.</p>
+                </div>
+            </body>
+            </html>
             '''
         else:
-            return "<h2>❌ Activation Failed</h2><p>Could not activate subscription.</p>"
+            return '''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Activation Failed - TurnitQ</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body {{
+                        font-family: 'Arial', sans-serif;
+                        background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+                        margin: 0;
+                        padding: 20px;
+                        min-height: 100vh;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                    }}
+                    .container {{
+                        background: white;
+                        padding: 40px;
+                        border-radius: 15px;
+                        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                        max-width: 500px;
+                        width: 100%;
+                        text-align: center;
+                    }}
+                    .error-icon {{
+                        font-size: 80px;
+                        color: #dc3545;
+                        margin-bottom: 20px;
+                    }}
+                    h2 {{
+                        color: #333;
+                        margin-bottom: 20px;
+                    }}
+                    .btn {{
+                        display: inline-block;
+                        background: #dc3545;
+                        color: white;
+                        padding: 12px 25px;
+                        text-decoration: none;
+                        border-radius: 8px;
+                        font-weight: bold;
+                        margin-top: 20px;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="error-icon">❌</div>
+                    <h2>Activation Failed</h2>
+                    <p>Could not activate subscription. Please try again or contact support.</p>
+                    <a href="/payment-success?plan=''' + plan + '''" class="btn">Try Again</a>
+                </div>
+            </body>
+            </html>
+            '''
             
     except Exception as e:
-        return f"<h2>Error</h2><p>{str(e)}</p>"
+        return f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Error - TurnitQ</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {{
+                    font-family: 'Arial', sans-serif;
+                    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+                    margin: 0;
+                    padding: 20px;
+                    min-height: 100vh;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                }}
+                .container {{
+                    background: white;
+                    padding: 40px;
+                    border-radius: 15px;
+                    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                    max-width: 500px;
+                    width: 100%;
+                    text-align: center;
+                }}
+                .error-icon {{
+                    font-size: 80px;
+                    color: #dc3545;
+                    margin-bottom: 20px;
+                }}
+                h2 {{
+                    color: #333;
+                    margin-bottom: 20px;
+                }}
+                .error-details {{
+                    background: #f8d7da;
+                    padding: 15px;
+                    border-radius: 8px;
+                    border-left: 4px solid #dc3545;
+                    margin: 20px 0;
+                    text-align: left;
+                }}
+                .btn {{
+                    display: inline-block;
+                    background: #dc3545;
+                    color: white;
+                    padding: 12px 25px;
+                    text-decoration: none;
+                    border-radius: 8px;
+                    font-weight: bold;
+                    margin-top: 20px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="error-icon">❌</div>
+                <h2>Error</h2>
+                <div class="error-details">
+                    <p><strong>Error Details:</strong></p>
+                    <p>{str(e)}</p>
+                </div>
+                <p>Please check the Telegram ID and try again.</p>
+                <a href="/payment-success?plan={plan}" class="btn">Go Back</a>
+            </div>
+        </body>
+        </html>
+        '''
 
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
