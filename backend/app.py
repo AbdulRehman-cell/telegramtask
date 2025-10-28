@@ -198,7 +198,7 @@ PLANS = {
 # Referral Configuration
 REFERRAL_EARNING_PER_PAYMENT = 10 # ₵10 per successful referral
 MIN_WITHDRAWAL_AMOUNT = 50  # ₵50 minimum withdrawal
-
+#man
 # Utilities
 def now_ts():
     return int(time.time())
