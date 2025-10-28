@@ -68,7 +68,8 @@ def init_db():
         expiry_date TEXT,
         last_submission INTEGER DEFAULT 0,
         free_checks_used INTEGER DEFAULT 0,
-        subscription_active BOOLEAN DEFAULT 0
+        subscription_active BOOLEAN DEFAULT 0,
+        created_at INTEGER
     );
     CREATE TABLE IF NOT EXISTS submissions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,7 +89,8 @@ def init_db():
         waiting_for_options BOOLEAN DEFAULT 0,
         current_file_path TEXT,
         current_filename TEXT,
-        current_file_id TEXT
+        current_file_id TEXT,
+        waiting_for_withdrawal BOOLEAN DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -352,7 +354,7 @@ def user_get(user_id):
     cur = db.cursor()
     r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     if not r:
-        cur.execute("INSERT INTO users(user_id) VALUES(?)", (user_id,))
+        cur.execute("INSERT INTO users(user_id, created_at) VALUES(?, ?)", (user_id, now_ts()))
         db.commit()
         r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     return r
@@ -1764,6 +1766,15 @@ def telegram_webhook(bot_token):
             print(f"👤 User {user_id}: {text}")
             
             session = get_user_session(user_id)
+            
+            # Handle withdrawal mobile money number input
+            if session.get('waiting_for_withdrawal') and text.isdigit() and len(text) == 10:
+                mobile_money_number = text
+                success, message = handle_withdrawal_request(user_id, mobile_money_number)
+                update_user_session(user_id, waiting_for_withdrawal=0)
+                send_telegram_message(user_id, message)
+                return "ok", 200
+            
             # If we're waiting for options from user AND they sent text treat as options
             if session['waiting_for_options'] and text:
                 options = parse_options_response(text)
@@ -1938,19 +1949,11 @@ def telegram_webhook(bot_token):
                         f"We'll process your withdrawal within 24 hours."
                     )
                     update_user_session(user_id, waiting_for_withdrawal=1)
-            elif text.isdigit() and len(text) == 10:
-                # Check if user is waiting for withdrawal
-                session = get_user_session(user_id)
-                if session.get('waiting_for_withdrawal'):
-                    mobile_money_number = text
-                    success, message = handle_withdrawal_request(user_id, mobile_money_number)
-                    update_user_session(user_id, waiting_for_withdrawal=0)
-                    send_telegram_message(user_id, message)
             elif text.startswith("/cancel"):
                 # Cancel current submission
                 cancelled = cancel_user_submission(user_id)
                 if not cancelled:
-                    send_telegram_message(user_id, "⚠️ No active submission to cancel.")
+                    send_telegram_message(user_id, "⚠️ You have no active submission to cancel.")
             elif 'document' in message:
                 doc = message['document']
                 filename = doc.get('file_name', f"file_{now_ts()}")
@@ -2143,10 +2146,24 @@ def telegram_webhook(bot_token):
                         refresh_user_id = int(refresh_user_id)
                         user_data = user_get(refresh_user_id)
                         if user_data and user_data['plan'] == refresh_plan and user_data['subscription_active']:
-                            send_telegram_message(user_id, "✅ Your subscription is active! You can now use premium features.")
+                            # Send updated account info
+                            plan_name = PLANS[user_data['plan']]['name'] if user_data['plan'] in PLANS else user_data['plan'].title()
+                            expiry = user_data['expiry_date'] if user_data['expiry_date'] else "No active subscription"
+                            used = user_data['used_today']
+                            daily_limit = user_data['daily_limit']
+                            
+                            info_message = (
+                                f"✅ <b>Subscription Active!</b>\n\n"
+                                f"📊 <b>Plan:</b> {plan_name}\n"
+                                f"📅 <b>Expires:</b> {expiry}\n"
+                                f"📈 <b>Daily Checks Used:</b> {used}/{daily_limit}\n\n"
+                                f"🚀 You can now use all premium features!"
+                            )
+                            send_telegram_message(user_id, info_message)
                         else:
                             send_telegram_message(user_id, "⏳ Payment still processing. Please wait a moment and try again.")
-                    except:
+                    except Exception as e:
+                        print(f"❌ Error checking payment status: {e}")
                         send_telegram_message(user_id, "❌ Error checking status. Please contact support.")
                 
         return "ok", 200
