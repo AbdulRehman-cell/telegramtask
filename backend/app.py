@@ -2171,7 +2171,7 @@ def telegram_webhook(bot_token):
     except Exception as e:
         print(f"❌ Webhook error: {e}")
         return "error", 500
-
+#start
 def setup_webhook():
     try:
         webhook_url = f"{WEBHOOK_BASE_URL}/webhook/{TELEGRAM_BOT_TOKEN}"
