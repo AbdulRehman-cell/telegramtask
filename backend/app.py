@@ -1801,8 +1801,7 @@ def telegram_webhook(bot_token):
                     if referrer_id:
                         send_telegram_message(user_id, 
                             "👋 Welcome to TurnitQ! 🎉\n"
-                            "You joined using a referral link! "
-                            "When you make your first payment, your friend will earn ₵10!\n\n"
+                            "You joined using a referral link! \n"
                             "Upload your document to check its originality instantly.\n"
                             "Use /check to begin."
                         )
