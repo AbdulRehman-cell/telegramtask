@@ -234,7 +234,7 @@ def get_or_create_referral_earnings(user_id):
         ).fetchone()
     
     conn.close()
-    return earnings
+    return dict(earnings) if earnings else None
 
 def handle_referral_signup(referred_user_id, referral_code):
     """Handle new user signup with referral code"""
@@ -367,7 +367,7 @@ def user_get(user_id):
         conn.commit()
         r = conn.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     conn.close()
-    return r
+    return dict(r) if r else None
 
 def get_user_session(user_id):
     conn = get_db()
@@ -377,7 +377,7 @@ def get_user_session(user_id):
         conn.commit()
         r = conn.execute("SELECT * FROM user_sessions WHERE user_id=?", (user_id,)).fetchone()
     conn.close()
-    return r
+    return dict(r) if r else None
 
 def update_user_session(user_id, **kwargs):
     conn = get_db()
@@ -1657,16 +1657,16 @@ def telegram_webhook(bot_token):
             
             session = get_user_session(user_id)
             
-            # Handle withdrawal mobile money number input
-            if session.get('waiting_for_withdrawal') and text.isdigit() and len(text) == 10:
+            # Handle withdrawal mobile money number input - FIXED: Use dictionary access
+            if session and session['waiting_for_withdrawal'] and text.isdigit() and len(text) == 10:
                 mobile_money_number = text
                 success, message = handle_withdrawal_request(user_id, mobile_money_number)
                 update_user_session(user_id, waiting_for_withdrawal=0)
                 send_telegram_message(user_id, message)
                 return "ok", 200
             
-            # If we're waiting for options from user AND they sent text treat as options
-            if session['waiting_for_options'] and text:
+            # If we're waiting for options from user AND they sent text treat as options - FIXED: Use dictionary access
+            if session and session['waiting_for_options'] and text:
                 options = parse_options_response(text)
                 if options:
                     update_user_session(user_id, waiting_for_options=0)
