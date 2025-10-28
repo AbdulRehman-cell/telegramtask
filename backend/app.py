@@ -1,4 +1,3 @@
-#imports
 import os
 import time
 import json
@@ -12,7 +11,6 @@ import random
 import hmac
 import hashlib
 from typing import Optional
-import string
 
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -116,35 +114,6 @@ def init_db():
         error_message TEXT,
         created_at INTEGER
     );
-    -- Referral System Tables
-    CREATE TABLE IF NOT EXISTS referrals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        referrer_id INTEGER,
-        referred_id INTEGER,
-        referral_code TEXT,
-        earned_amount REAL DEFAULT 0,
-        is_used BOOLEAN DEFAULT 0,
-        created_at INTEGER,
-        used_at INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS referral_earnings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        total_earned REAL DEFAULT 0,
-        total_withdrawn REAL DEFAULT 0,
-        referral_code TEXT UNIQUE,
-        created_at INTEGER,
-        updated_at INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS withdrawals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        amount REAL,
-        mobile_number TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at INTEGER,
-        processed_at INTEGER
-    );
     """)
     db.commit()
 
@@ -196,101 +165,9 @@ PLANS = {
     }
 }
 
-# Referral Configuration
-REFERRAL_EARNING_PER_PAYMENT = 10 # ₵10 per successful referral
-MIN_WITHDRAWAL_AMOUNT = 50  # ₵50 minimum withdrawal
-#man
 # Utilities
 def now_ts():
     return int(time.time())
-
-def generate_referral_code(user_id, length=6):
-    """Generate a unique referral code for user"""
-    base_code = f"TQ{user_id % 10000:04d}"
-    return base_code.upper()
-
-def get_or_create_referral_code(user_id):
-    """Get existing referral code or create new one"""
-    cur = db.cursor()
-    
-    # Check if user already has a referral code
-    referral = cur.execute(
-        "SELECT * FROM referral_earnings WHERE user_id=?", (user_id,)
-    ).fetchone()
-    
-    if referral:
-        return referral['referral_code']
-    
-    # Generate new referral code
-    referral_code = generate_referral_code(user_id)
-    
-    # Insert new referral record
-    cur.execute(
-        "INSERT INTO referral_earnings (user_id, referral_code, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        (user_id, referral_code, now_ts(), now_ts())
-    )
-    db.commit()
-    
-    return referral_code
-
-def get_referral_balance(user_id):
-    """Get user's referral balance"""
-    cur = db.cursor()
-    referral = cur.execute(
-        "SELECT total_earned, total_withdrawn FROM referral_earnings WHERE user_id=?", (user_id,)
-    ).fetchone()
-    
-    if referral:
-        available_balance = referral['total_earned'] - referral['total_withdrawn']
-        return available_balance, referral['total_earned'], referral['total_withdrawn']
-    
-    return 0, 0, 0
-
-def process_referral_earning(referred_user_id, payment_amount):
-    """Process referral earnings when a user makes their first payment"""
-    cur = db.cursor()
-    
-    # Check if this user was referred by someone
-    referral = cur.execute(
-        "SELECT * FROM referrals WHERE referred_id=? AND is_used=0", (referred_user_id,)
-    ).fetchone()
-    
-    if not referral:
-        return None
-    
-    referrer_id = referral['referrer_id']
-    
-    # Check if this is user's first successful payment
-    previous_payments = cur.execute(
-        "SELECT COUNT(*) as count FROM payments WHERE user_id=? AND status='success'", (referred_user_id,)
-    ).fetchone()
-    
-    if previous_payments['count'] > 1:
-        return None  # Only reward for first payment
-    
-    # Award referral bonus
-    cur.execute(
-        "UPDATE referral_earnings SET total_earned = total_earned + ?, updated_at = ? WHERE user_id=?",
-        (REFERRAL_EARNING_PER_PAYMENT, now_ts(), referrer_id)
-    )
-    
-    # Mark referral as used
-    cur.execute(
-        "UPDATE referrals SET is_used=1, earned_amount=?, used_at=? WHERE id=?",
-        (REFERRAL_EARNING_PER_PAYMENT, now_ts(), referral['id'])
-    )
-    
-    db.commit()
-    
-    # Send notification to referrer
-    send_telegram_message(
-        referrer_id,
-        f"🎉 Great news! Someone you referred just made their first payment.\n"
-        f"₵{REFERRAL_EARNING_PER_PAYMENT} has been added to your referral balance.\n\n"
-        f"Use /referral to check your balance."
-    )
-    
-    return referrer_id
 
 def user_get(user_id):
     cur = db.cursor()
@@ -703,7 +580,7 @@ PROCESSING OPTIONS:
 Exclude Bibliography: {'Yes' if options.get('exclude_bibliography') else 'No'}
 Exclude Quoted Text: {'Yes' if options.get('exclude_quoted_text') else 'No'} 
 Exclude Cited Text: {'Yes' if options.get('exclude_cited_text') else 'No'}
-Exclude Small Matatches: {'Yes' if options.get('exclude_small_matches') else 'No'}
+Exclude Small Matches: {'Yes' if options.get('exclude_small_matches') else 'No'}
 
 TOP MATCHING SOURCES:
 ---------------------
@@ -868,18 +745,13 @@ def process_document(submission_id, file_path, options):
             )
         
         if is_free_check:
-            # After free check, show upgrade and referral options
-            keyboard = create_inline_keyboard([
-                [("💎 Upgrade Plan", "upgrade_after_free")],
-                [("💰 Earn ₵10 per Referral", "show_referral_info")]
+            upgrade_keyboard = create_inline_keyboard([
+                [("💎 Upgrade Plan", "upgrade_after_free")]
             ])
             send_telegram_message(
                 user_id,
-                "🎁 Your first check was free!\n\n"
-                "💎 <b>Upgrade for unlimited checks and premium features</b>\n"
-                "💰 <b>Earn ₵10 for each friend who subscribes!</b>\n\n"
-                "Use /referral to get your referral link and start earning!",
-                reply_markup=keyboard
+                "🎁 Your first check was free!\nUpgrade for more features!",
+                reply_markup=upgrade_keyboard
             )
         
         # Clean up uploaded file
@@ -1195,9 +1067,6 @@ def activate_subscription():
             )
             db.commit()
             
-            # Process referral earnings if applicable
-            process_referral_earning(user_id, PLANS[plan]['price'])
-            
             # Send confirmation to user
             plan_data = PLANS[plan]
             success_message = (
@@ -1205,7 +1074,7 @@ def activate_subscription():
                 f"✅ Your {plan_data['name']} plan is now active!\n"
                 f"📅 Expires: {expiry_date}\n"
                 f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
-                f"💡 <b>Pro Tip:</b> Use /referral to earn ₵10 for each friend who subscribes!"
+                f"Thank you for your payment!"
             )
             send_telegram_message(user_id, success_message)
             
@@ -1468,9 +1337,6 @@ def manual_activation():
             )
             db.commit()
             
-            # Process referral earnings if applicable
-            process_referral_earning(user_id, PLANS[plan]['price'])
-            
             # Send confirmation to user
             plan_data = PLANS[plan]
             success_message = (
@@ -1638,9 +1504,6 @@ def paystack_webhook():
                         )
                         db.commit()
                         
-                        # Process referral earnings
-                        process_referral_earning(user_id, amount)
-                        
                         # Send automatic confirmation to user
                         success_message = (
                             f"🎉 Payment Verified & Activated!\n\n"
@@ -1649,7 +1512,7 @@ def paystack_webhook():
                             f"🔓 Daily checks: {plan_data['daily_limit']}\n"
                             f"💰 Amount: ${amount}\n\n"
                             f"🚀 You can now use all premium features immediately!\n"
-                            f"💡 Use /referral to earn ₵10 for each friend who subscribes!"
+                            f"📄 Upload a document to get started."
                         )
                         send_telegram_message(user_id, success_message)
                         print(f"✅ Subscription auto-activated for user {user_id}, plan {plan}")
@@ -1731,17 +1594,8 @@ def telegram_webhook(bot_token):
                     
                     # Prevent second free attempt
                     if not is_free_check and user_data['free_checks_used'] > 0 and user_data['plan'] == 'free':
-                        keyboard = create_inline_keyboard([
-                            [("💎 Upgrade Plan", "plan_premium")],
-                            [("💰 Earn ₵10 per Referral", "show_referral_info")]
-                        ])
-                        send_telegram_message(user_id, 
-                            "⚠️ You've already used your free check.\n\n"
-                            "💎 <b>Subscribe to continue using TurnitQ</b>\n"
-                            "💰 <b>Earn ₵10 for each friend who subscribes!</b>\n\n"
-                            "Use /referral to get your referral link and start earning!",
-                            reply_markup=keyboard
-                        )
+                        upgrade_keyboard = create_inline_keyboard([[("💎 Upgrade Plan", "plan_premium")]])
+                        send_telegram_message(user_id, "⚠️ You've already used your free check. Subscribe to continue using TurnitQ.", reply_markup=upgrade_keyboard)
                         return "ok", 200
                     
                     # Check daily limit
@@ -1787,37 +1641,9 @@ def telegram_webhook(bot_token):
             
             # Handle commands
             if text.startswith("/start"):
-                # Check if there's a referral code in the start command
-                referral_code = None
-                if ' ' in text:
-                    referral_code = text.split(' ', 1)[1].strip()
-                
-                welcome_message = "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\nUse /check to begin."
-                
-                # If referral code provided, register the referral
-                if referral_code:
-                    cur = db.cursor()
-                    referrer = cur.execute(
-                        "SELECT user_id FROM referral_earnings WHERE referral_code=?", (referral_code,)
-                    ).fetchone()
-                    
-                    if referrer and referrer['user_id'] != user_id:
-                        # Check if this user already has a referral record
-                        existing_ref = cur.execute(
-                            "SELECT * FROM referrals WHERE referred_id=?", (user_id,)
-                        ).fetchone()
-                        
-                        if not existing_ref:
-                            # Create referral record
-                            cur.execute(
-                                "INSERT INTO referrals (referrer_id, referred_id, referral_code, created_at) VALUES (?, ?, ?, ?)",
-                                (referrer['user_id'], user_id, referral_code, now_ts())
-                            )
-                            db.commit()
-                            welcome_message += f"\n\n🎁 You've been referred by a friend! You'll both earn rewards when you subscribe."
-                
-                send_telegram_message(user_id, welcome_message)
-                
+                send_telegram_message(user_id, 
+                    "👋 Welcome to TurnitQ!\nUpload your document to check its originality instantly.\n"
+                    "Use /check to begin.")
             elif text.startswith("/check"):
                 send_telegram_message(user_id, "📄 Upload your document (.pdf or .docx)\nOnly one file can be processed at a time")
             elif text.startswith("/id"):
@@ -1841,123 +1667,18 @@ def telegram_webhook(bot_token):
                     f"💡 <i>Use /upgrade to get more features!</i>"
                 )
                 send_telegram_message(user_id, info_message)
-            elif text.startswith("/referral"):
-                # Handle referral command
-                referral_code = get_or_create_referral_code(user_id)
-                available_balance, total_earned, total_withdrawn = get_referral_balance(user_id)
-                
-                referral_message = (
-                    f"👤 <b>Referral Code:</b> <code>{referral_code}</code>\n"
-                    f"🔗 <b>Referral Link:</b> https://t.me/turnitQbot?start={referral_code}\n"
-                    f"💰 <b>Recorded Balance:</b> ₵{available_balance:.2f}\n\n"
-                )
-                
-                if available_balance >= MIN_WITHDRAWAL_AMOUNT:
-                    referral_message += (
-                        f"✅ <b>You're eligible to withdraw!</b>\n"
-                        f"Type /withdraw to cash out via mobile money.\n\n"
-                    )
-                else:
-                    needed = MIN_WITHDRAWAL_AMOUNT - available_balance
-                    referral_message += (
-                        f"⚠️ <b>Withdrawals are available at ₵{MIN_WITHDRAWAL_AMOUNT}</b>\n"
-                        f"You need ₵{needed:.2f} more to cash out.\n\n"
-                    )
-                
-                if available_balance == 0:
-                    referral_message += (
-                        f"💡 <b>Invite friends!</b> You'll earn ₵{REFERRAL_EARNING_PER_PAYMENT} when they make their first paid check.\n\n"
-                        f"<i>Share your referral link with friends. When they subscribe using your link, you both earn rewards!</i>"
-                    )
-                else:
-                    referral_message += (
-                        f"💡 <b>Keep inviting friends!</b> Each new subscriber earns you ₵{REFERRAL_EARNING_PER_PAYMENT}.\n\n"
-                        f"<i>Total earned: ₵{total_earned:.2f} | Total withdrawn: ₵{total_withdrawn:.2f}</i>"
-                    )
-                
-                send_telegram_message(user_id, referral_message)
-                
-            elif text.startswith("/withdraw"):
-                available_balance, total_earned, total_withdrawn = get_referral_balance(user_id)
-                
-                if available_balance < MIN_WITHDRAWAL_AMOUNT:
-                    needed = MIN_WITHDRAWAL_AMOUNT - available_balance
-                    send_telegram_message(
-                        user_id,
-                        f"❌ <b>Withdrawal Not Available</b>\n\n"
-                        f"Your current balance: ₵{available_balance:.2f}\n"
-                        f"Minimum withdrawal: ₵{MIN_WITHDRAWAL_AMOUNT}\n"
-                        f"You need ₵{needed:.2f} more to withdraw.\n\n"
-                        f"💡 <i>Share your referral link to earn more! Use /referral to get your link.</i>"
-                    )
-                    return "ok", 200
-                
-                # Ask for mobile money number
-                send_telegram_message(
-                    user_id,
-                    f"💰 <b>Withdrawal Request</b>\n\n"
-                    f"Available balance: ₵{available_balance:.2f}\n"
-                    f"Minimum withdrawal: ₵{MIN_WITHDRAWAL_AMOUNT}\n\n"
-                    f"Please reply with your <b>mobile money number</b> (e.g., 0551234567) to process your withdrawal.\n\n"
-                    f"<i>Withdrawals are processed within 24 hours.</i>"
-                )
-                update_user_session(user_id, waiting_for_withdrawal=1)
-                
             elif text.startswith("/upgrade"):
                 keyboard = create_inline_keyboard([
                     [("⚡ Premium - $8", "plan_premium")],
                     [("🚀 Pro - $29", "plan_pro")],
-                    [("👑 Elite - $79", "plan_elite")],
-                    [("💰 Earn ₵10 per Referral", "show_referral_info")]
+                    [("👑 Elite - $79", "plan_elite")]
                 ])
-                send_telegram_message(user_id, 
-                    "📊 <b>Choose your plan:</b>\n\n"
-                    "💡 <i>Upgrade for unlimited checks and premium features!</i>\n\n"
-                    "💰 <b>Bonus:</b> Earn ₵10 for each friend who subscribes using your referral link!",
-                    reply_markup=keyboard
-                )
+                send_telegram_message(user_id, "📊 Choose your plan:", reply_markup=keyboard)
             elif text.startswith("/cancel"):
                 # Cancel current submission
                 cancelled = cancel_user_submission(user_id)
                 if not cancelled:
-                    send_telegram_message(user_id, "⚠️ You have no active submissions to cancel.")
-            elif session.get('waiting_for_withdrawal'):
-                # Handle withdrawal mobile number input
-                mobile_number = text.strip()
-                available_balance, total_earned, total_withdrawn = get_referral_balance(user_id)
-                
-                if available_balance >= MIN_WITHDRAWAL_AMOUNT:
-                    cur = db.cursor()
-                    
-                    # Create withdrawal record
-                    cur.execute(
-                        "INSERT INTO withdrawals (user_id, amount, mobile_number, status, created_at) VALUES (?, ?, ?, ?, ?)",
-                        (user_id, available_balance, mobile_number, 'pending', now_ts())
-                    )
-                    
-                    # Update referral earnings (mark as withdrawn)
-                    cur.execute(
-                        "UPDATE referral_earnings SET total_withdrawn = total_withdrawn + ?, updated_at = ? WHERE user_id=?",
-                        (available_balance, now_ts(), user_id)
-                    )
-                    
-                    db.commit()
-                    
-                    update_user_session(user_id, waiting_for_withdrawal=0)
-                    
-                    send_telegram_message(
-                        user_id,
-                        f"✅ <b>Withdrawal Request Submitted!</b>\n\n"
-                        f"💰 <b>Amount:</b> ₵{available_balance:.2f}\n"
-                        f"📱 <b>Mobile Money:</b> {mobile_number}\n"
-                        f"⏰ <b>Status:</b> Pending\n\n"
-                        f"Your withdrawal will be processed within 24 hours.\n\n"
-                        f"💡 <i>Continue earning with /referral</i>"
-                    )
-                else:
-                    send_telegram_message(user_id, "❌ Insufficient balance for withdrawal.")
-                    update_user_session(user_id, waiting_for_withdrawal=0)
-                    
+                    send_telegram_message(user_id, "⚠️ No active submission to cancel.")
             elif 'document' in message:
                 doc = message['document']
                 filename = doc.get('file_name', f"file_{now_ts()}")
@@ -1974,17 +1695,8 @@ def telegram_webhook(bot_token):
 
                 # Check free-check usage: if free used, ask to upgrade (but allow paid users)
                 if u['plan'] == 'free' and u['free_checks_used'] > 0:
-                    keyboard = create_inline_keyboard([
-                        [("💎 Upgrade Plan", "plan_premium")],
-                        [("💰 Earn ₵10 per Referral", "show_referral_info")]
-                    ])
-                    send_telegram_message(user_id, 
-                        "⚠️ You've already used your free check.\n\n"
-                        "💎 <b>Subscribe to continue using TurnitQ</b>\n"
-                        "💰 <b>Earn ₵10 for each friend who subscribes!</b>\n\n"
-                        "Use /referral to get your referral link and start earning!",
-                        reply_markup=keyboard
-                    )
+                    upgrade_keyboard = create_inline_keyboard([[("💎 Upgrade Plan", "plan_premium")]])
+                    send_telegram_message(user_id, "⚠️ You've already used your free check. Subscribe to continue using TurnitQ.", reply_markup=upgrade_keyboard)
                     return "ok", 200
 
                 # Save session and ask for options
@@ -1999,7 +1711,7 @@ def telegram_webhook(bot_token):
                 # invalid / unsupported plain text
                 invalid_msg = (
                     "⚠️ Please use one of the available commands:\n"
-                    " /check • /cancel • /upgrade • /id • /referral"
+                    " /check • /cancel • /upgrade • /id"
                 )
                 send_telegram_message(user_id, invalid_msg)
 
@@ -2037,43 +1749,17 @@ def telegram_webhook(bot_token):
                 keyboard = create_inline_keyboard([
                     [("⚡ Premium - $8", "plan_premium")],
                     [("🚀 Pro - $29", "plan_pro")],
-                    [("👑 Elite - $79", "plan_elite")],
-                    [("💰 Earn ₵10 per Referral", "show_referral_info")]
+                    [("👑 Elite - $79", "plan_elite")]
                 ])
                 send_telegram_message(user_id, "📊 Choose your plan:", reply_markup=keyboard)
-                
-            elif data == "show_referral_info":
-                referral_code = get_or_create_referral_code(user_id)
-                available_balance, total_earned, total_withdrawn = get_referral_balance(user_id)
-                
-                referral_message = (
-                    f"💰 <b>Earn ₵10 Per Referral!</b>\n\n"
-                    f"👤 <b>Your Referral Code:</b> <code>{referral_code}</code>\n"
-                    f"🔗 <b>Your Referral Link:</b> https://t.me/turnitQbot?start={referral_code}\n"
-                    f"💰 <b>Current Balance:</b> ₵{available_balance:.2f}\n\n"
-                    f"<b>How it works:</b>\n"
-                    f"• Share your referral link with friends\n"
-                    f"• When they subscribe using your link\n"
-                    f"• You earn ₵{REFERRAL_EARNING_PER_PAYMENT} for each friend!\n"
-                    f"• Withdraw when you reach ₵{MIN_WITHDRAWAL_AMOUNT}\n\n"
-                    f"💡 <i>Start earning now! Share your link with friends and classmates.</i>"
-                )
-                
-                send_telegram_message(user_id, referral_message)
                 
             elif data == "upgrade_after_free":
                 keyboard = create_inline_keyboard([
                     [("⚡ Premium - $8", "plan_premium")],
                     [("🚀 Pro - $29", "plan_pro")],
-                    [("👑 Elite - $79", "plan_elite")],
-                    [("💰 Earn ₵10 per Referral", "show_referral_info")]
+                    [("👑 Elite - $79", "plan_elite")]
                 ])
-                send_telegram_message(user_id, 
-                    "📊 <b>Choose your upgrade plan:</b>\n\n"
-                    "💡 <i>Upgrade for unlimited checks and premium features!</i>\n\n"
-                    "💰 <b>Bonus:</b> Earn ₵10 for each friend who subscribes using your referral link!",
-                    reply_markup=keyboard
-                )
+                send_telegram_message(user_id, "📊 Choose your upgrade plan:", reply_markup=keyboard)
                 
             elif data.startswith("refresh_payment_"):
                 # Handle payment status refresh
@@ -2113,7 +1799,6 @@ def setup_webhook():
 if __name__ == "__main__":
     print("🚀 Starting TurnitQ Bot on Render...")
     print(f"💰 Paystack Payments: ENABLED")
-    print(f"🤝 Referral System: ENABLED (₵{REFERRAL_EARNING_PER_PAYMENT} per referral)")
     setup_webhook()
     port = int(os.environ.get("PORT", 5000))
     print(f"🌐 Server starting on port {port}")
