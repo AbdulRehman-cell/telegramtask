@@ -146,6 +146,7 @@ def init_db():
     """)
     db.commit()
 
+# Initialize database
 init_db()
 
 # Initialize global daily allocation
@@ -1232,16 +1233,19 @@ def payment_success():
 @app.route("/activate-subscription", methods=["POST"])
 def activate_subscription():
     """Process the Telegram ID and activate subscription"""
-    user_id = request.form.get('user_id')
-    plan = request.form.get('plan')
-    reference = request.form.get('reference')  # This gets the value from the hidden input
-    
     try:
+        user_id = request.form.get('user_id')
+        plan = request.form.get('plan')
+        reference = request.form.get('reference', '')
+        
+        if not user_id or not plan:
+            return "Missing user_id or plan", 400
+            
         user_id = int(user_id)
         expiry_date = activate_user_subscription(user_id, plan)
         
         if expiry_date:
-            # Store payment record .
+            # Store payment record
             cur = db.cursor()
             cur.execute(
                 "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1411,6 +1415,7 @@ def activate_subscription():
             '''
             
     except Exception as e:
+        print(f"❌ Activation error: {e}")
         return f'''
         <!DOCTYPE html>
         <html>
@@ -1479,7 +1484,7 @@ def activate_subscription():
             </div>
         </body>
         </html>
-        '''
+        ''', 500
 
 @app.route("/manual-activate", methods=['GET', 'POST'])
 def manual_activation():
@@ -1502,11 +1507,14 @@ def manual_activation():
         '''
     
     # Handle form submission
-    user_id = request.form.get('user_id')
-    plan = request.form.get('plan')
-    reference = request.form.get('reference', 'manual')
-    
     try:
+        user_id = request.form.get('user_id')
+        plan = request.form.get('plan')
+        reference = request.form.get('reference', 'manual')
+        
+        if not user_id or not plan:
+            return "<h2>❌ Missing user_id or plan</h2>", 400
+            
         user_id = int(user_id)
         expiry_date = activate_user_subscription(user_id, plan)
         
@@ -1540,7 +1548,7 @@ def manual_activation():
             return "<h2>❌ Activation Failed</h2><p>Could not activate subscription.</p>"
             
     except Exception as e:
-        return f"<h2>Error</h2><p>{str(e)}</p>"
+        return f"<h2>Error</h2><p>{str(e)}</p>", 500
 
 @app.route("/paystack-webhook", methods=["POST"])
 def paystack_webhook():
@@ -1568,7 +1576,6 @@ def paystack_webhook():
         event = data.get('event')
         
         print(f"📨 Received Paystack webhook: {event}")
-        print(f"📊 Full webhook data: {json.dumps(data, indent=2)}")
         
         if event == 'charge.success':
             payment_data = data.get('data', {})
@@ -1579,17 +1586,13 @@ def paystack_webhook():
             custom_fields = payment_data.get('custom_fields', [])
             
             print(f"💰 Payment successful - Reference: {reference}, Amount: ${amount}")
-            print(f"📧 Customer email: {customer_email}")
-            print(f"📋 Custom fields: {custom_fields}")
-            print(f"📝 Metadata: {metadata}")
             
             # Extract user info from multiple sources
             user_id = None
             plan = None
             
-            # METHOD 1: Extract from custom_fields (Primary method for payment pages)
+            # METHOD 1: Extract from custom_fields
             for field in custom_fields:
-                print(f"🔍 Checking field: {field}")
                 variable_name = field.get('variable_name', '').lower()
                 value = field.get('value', '')
                 
@@ -1614,7 +1617,6 @@ def paystack_webhook():
             
             # METHOD 3: Extract from customer email (fallback)
             if not user_id and customer_email:
-                print(f"🔍 Checking email for Telegram ID: {customer_email}")
                 if customer_email.startswith('user') and '@turnitq.com' in customer_email:
                     try:
                         user_id = int(customer_email.replace('user', '').replace('@turnitq.com', ''))
@@ -1626,7 +1628,7 @@ def paystack_webhook():
             if not plan:
                 plan_data = {8: 'premium', 29: 'pro', 79: 'elite'}
                 closest_plan = min(plan_data.keys(), key=lambda x: abs(x - amount))
-                if abs(amount - closest_plan) <= 5:  # Allow $5 difference
+                if abs(amount - closest_plan) <= 5:
                     plan = plan_data[closest_plan]
                     print(f"💰 Inferred plan from amount: {plan} (${amount})")
             
@@ -1639,41 +1641,7 @@ def paystack_webhook():
                     # Verify this is a valid plan
                     if plan not in PLANS:
                         print(f"❌ Invalid plan: {plan}")
-                        # Try to find closest plan
-                        plan_data = {8: 'premium', 29: 'pro', 79: 'elite'}
-                        closest_plan = min(plan_data.keys(), key=lambda x: abs(x - amount))
-                        if abs(amount - closest_plan) <= 5:
-                            plan = plan_data[closest_plan]
-                            print(f"🔄 Using closest plan: {plan}")
-                        else:
-                            return jsonify({"status": "error", "message": "Invalid plan"}), 400
-                    
-                    # Verify payment amount matches plan price (allow small differences for currency conversion)
-                    plan_data = PLANS[plan]
-                    expected_amount = plan_data['price']
-                    
-                    if abs(amount - expected_amount) > 5:  # Allow $5 difference
-                        print(f"⚠️ Amount mismatch: paid ${amount}, expected ${expected_amount}")
-                        # Continue anyway as amount might be in different currency
-                    
-                    # Check if user already has this plan active
-                    user = user_get(user_id)
-                    if user and user['plan'] == plan and user['subscription_active']:
-                        print(f"ℹ️ User {user_id} already has active {plan} plan")
-                        # Still record the payment and notify user
-                        cur = db.cursor()
-                        cur.execute(
-                            "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (user_id, plan, amount, reference, 'success', now_ts(), now_ts())
-                        )
-                        db.commit()
-                        
-                        send_telegram_message(user_id, 
-                            f"✅ Payment received! Your {plan} plan is already active.\n"
-                            f"💰 Amount: ${amount}\n"
-                            f"📅 Your subscription remains active until: {user['expiry_date']}"
-                        )
-                        return jsonify({"status": "already_active"}), 200
+                        return jsonify({"status": "error", "message": "Invalid plan"}), 400
                     
                     # ACTIVATE SUBSCRIPTION AUTOMATICALLY
                     expiry_date = activate_user_subscription(user_id, plan)
@@ -1687,6 +1655,7 @@ def paystack_webhook():
                         db.commit()
                         
                         # Send automatic confirmation to user
+                        plan_data = PLANS[plan]
                         success_message = (
                             f"🎉 Payment Verified & Activated!\n\n"
                             f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
@@ -1707,10 +1676,6 @@ def paystack_webhook():
                         }), 200
                     else:
                         print(f"❌ Failed to activate subscription for user {user_id}")
-                        send_telegram_message(user_id, 
-                            f"❌ Subscription activation failed.\n"
-                            f"Please contact support with reference: {reference}"
-                        )
                         return jsonify({"status": "activation_failed"}), 500
                         
                 except (ValueError, TypeError) as e:
@@ -1718,23 +1683,10 @@ def paystack_webhook():
                     return jsonify({"status": "invalid_user_id"}), 400
             else:
                 print(f"❌ Missing user_id or plan in webhook")
-                print(f"User ID: {user_id}, Plan: {plan}")
-                print(f"Custom fields: {custom_fields}")
-                print(f"Metadata: {metadata}")
-                
-                # Log this for debugging
-                cur = db.cursor()
-                cur.execute(
-                    "INSERT INTO payments (plan, amount, reference, status, created_at, error_data) VALUES (?, ?, ?, ?, ?, ?)",
-                    (plan or 'unknown', amount, reference, 'missing_data', now_ts(), json.dumps({'custom_fields': custom_fields, 'metadata': metadata}))
-                )
-                db.commit()
-                
                 return jsonify({"status": "missing_data"}), 400
         
         elif event == 'charge.failed':
             print(f"❌ Payment failed: {data}")
-            # You could notify the user here if you have their ID
             return jsonify({"status": "payment_failed"}), 200
             
         else:
@@ -1867,8 +1819,6 @@ def telegram_webhook(bot_token):
                 plan = u['plan']
                 used = u['used_today']
                 daily_limit = u['daily_limit']
-                free_used = u['free_checks_used']
-                sub_active = "Yes" if u['subscription_active'] else "No"
                 
                 info_message = (
                     f"👤 <b>Your Account Info:</b>\n\n"
@@ -2151,6 +2101,8 @@ def telegram_webhook(bot_token):
         
     except Exception as e:
         print(f"❌ Webhook error: {e}")
+        import traceback
+        traceback.print_exc()
         return "error", 500
 
 def setup_webhook():
