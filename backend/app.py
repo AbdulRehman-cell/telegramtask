@@ -9,7 +9,6 @@ from pathlib import Path
 import hashlib
 import random
 import hmac
-import hashlib
 from typing import Optional
 
 from flask import Flask, request, jsonify
@@ -199,153 +198,6 @@ PLANS = {
 REFERRAL_REWARD = 10  # ₵10 per successful referral
 MIN_WITHDRAWAL = 50   # ₵50 minimum withdrawal
 
-# Referral System Functions
-def generate_referral_code(user_id):
-    """Generate a unique referral code for user"""
-    import string
-    chars = string.ascii_uppercase + string.digits
-    code = f"TQ{user_id:04d}" + ''.join(random.choices(chars, k=4))
-    
-    # Ensure uniqueness
-    cur = db.cursor()
-    while cur.execute("SELECT 1 FROM referral_earnings WHERE referral_code=?", (code,)).fetchone():
-        code = f"TQ{user_id:04d}" + ''.join(random.choices(chars, k=4))
-    
-    return code
-
-def get_or_create_referral_earnings(user_id):
-    """Get or create referral earnings record for user"""
-    cur = db.cursor()
-    earnings = cur.execute(
-        "SELECT * FROM referral_earnings WHERE user_id=?", (user_id,)
-    ).fetchone()
-    
-    if not earnings:
-        referral_code = generate_referral_code(user_id)
-        cur.execute(
-            "INSERT INTO referral_earnings (user_id, referral_code, created_at) VALUES (?, ?, ?)",
-            (user_id, referral_code, now_ts())
-        )
-        db.commit()
-        earnings = cur.execute(
-            "SELECT * FROM referral_earnings WHERE user_id=?", (user_id,)
-        ).fetchone()
-    
-    return earnings
-
-def handle_referral_signup(referred_user_id, referral_code):
-    """Handle new user signup with referral code"""
-    cur = db.cursor()
-    
-    # Find referrer by code
-    referrer = cur.execute(
-        "SELECT user_id FROM referral_earnings WHERE referral_code=?", (referral_code,)
-    ).fetchone()
-    
-    if referrer:
-        referrer_id = referrer['user_id']
-        
-        # Check if this referred user already used any referral code
-        existing_ref = cur.execute(
-            "SELECT 1 FROM referrals WHERE referred_id=?", (referred_user_id,)
-        ).fetchone()
-        
-        if not existing_ref:
-            # Record the referral
-            cur.execute(
-                "INSERT INTO referrals (referrer_id, referred_id, referral_code, created_at) VALUES (?, ?, ?, ?)",
-                (referrer_id, referred_user_id, referral_code, now_ts())
-            )
-            db.commit()
-            return referrer_id
-    
-    return None
-
-def process_referral_payment(referred_user_id):
-    """Process referral reward when referred user makes first payment"""
-    cur = db.cursor()
-    
-    # Find referral record
-    referral = cur.execute(
-        "SELECT * FROM referrals WHERE referred_id=? AND reward_credited=0", (referred_user_id,)
-    ).fetchone()
-    
-    if referral:
-        referrer_id = referral['referrer_id']
-        
-        # Credit reward to referrer
-        cur.execute(
-            "UPDATE referral_earnings SET amount=amount+?, total_earned=total_earned+? WHERE user_id=?",
-            (REFERRAL_REWARD, REFERRAL_REWARD, referrer_id)
-        )
-        
-        # Mark referral as used and credited
-        cur.execute(
-            "UPDATE referrals SET reward_credited=1, used_at=? WHERE id=?",
-            (now_ts(), referral['id'])
-        )
-        
-        db.commit()
-        
-        # Notify referrer
-        send_telegram_message(
-            referrer_id,
-            f"🎉 Great news! Someone you referred just made their first payment.\n"
-            f"₵{REFERRAL_REWARD} has been added to your referral balance."
-        )
-        
-        return True
-    
-    return False
-
-def get_referral_info(user_id):
-    """Get user's referral information"""
-    earnings = get_or_create_referral_earnings(user_id)
-    
-    cur = db.cursor()
-    total_referrals = cur.execute(
-        "SELECT COUNT(*) as count FROM referrals WHERE referrer_id=?", (user_id,)
-    ).fetchone()['count']
-    
-    successful_referrals = cur.execute(
-        "SELECT COUNT(*) as count FROM referrals WHERE referrer_id=? AND reward_credited=1", (user_id,)
-    ).fetchone()['count']
-    
-    return {
-        'referral_code': earnings['referral_code'],
-        'balance': earnings['amount'],
-        'total_earned': earnings['total_earned'],
-        'total_withdrawn': earnings['total_withdrawn'],
-        'total_referrals': total_referrals,
-        'successful_referrals': successful_referrals
-    }
-
-def handle_withdrawal_request(user_id, mobile_money_number):
-    """Process withdrawal request"""
-    referral_info = get_referral_info(user_id)
-    balance = referral_info['balance']
-    
-    if balance < MIN_WITHDRAWAL:
-        return False, f"Withdrawal minimum is ₵{MIN_WITHDRAWAL}. Your balance: ₵{balance}"
-    
-    cur = db.cursor()
-    
-    # Create withdrawal record
-    cur.execute(
-        "INSERT INTO withdrawals (user_id, amount, mobile_money_number, created_at) VALUES (?, ?, ?, ?)",
-        (user_id, balance, mobile_money_number, now_ts())
-    )
-    
-    # Update referral earnings
-    cur.execute(
-        "UPDATE referral_earnings SET amount=0, total_withdrawn=total_withdrawn+? WHERE user_id=?",
-        (balance, user_id)
-    )
-    
-    db.commit()
-    
-    return True, f"Withdrawal request for ₵{balance} submitted! We'll process it within 24 hours."
-
 # Utilities
 def now_ts():
     return int(time.time())
@@ -377,21 +229,6 @@ def update_user_session(user_id, **kwargs):
 
 def allowed_file(filename):
     return filename.lower().endswith((".pdf", ".docx"))
-
-def global_alloc():
-    cur = db.cursor()
-    r = cur.execute("SELECT v FROM meta WHERE k='global_alloc'").fetchone()
-    return int(r['v']) if r else 0
-
-def global_max():
-    cur = db.cursor()
-    r = cur.execute("SELECT v FROM meta WHERE k='global_max'").fetchone()
-    return int(r['v']) if r else 50
-
-def update_global_alloc(value):
-    cur = db.cursor()
-    cur.execute("UPDATE meta SET v=? WHERE k='global_alloc'", (str(value),))
-    db.commit()
 
 # Telegram API
 def send_telegram_message(chat_id, text, reply_markup=None):
@@ -562,9 +399,6 @@ def activate_user_subscription(user_id, plan):
         
         db.commit()
         
-        # Process referral reward if this is user's first payment
-        process_referral_payment(user_id)
-        
         print(f"✅ Subscription activated for user {user_id}, plan {plan}")
         return expiry_date
         
@@ -572,83 +406,7 @@ def activate_user_subscription(user_id, plan):
         print(f"❌ Subscription activation error: {e}")
         return None
 
-# REAL TURNITIN / SIMULATION helpers
-def setup_undetected_driver():
-    try:
-        import undetected_chromedriver as uc
-        
-        print("🚀 Setting up undetected Chrome driver...")
-        
-        options = uc.ChromeOptions()
-        options.add_argument('--headless=new')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-        
-        driver = uc.Chrome(options=options, driver_executable_path=None)
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
-        print("✅ Undetected Chrome driver setup complete")
-        return driver
-        
-    except Exception as e:
-        print(f"❌ Undetected Chrome setup failed: {e}")
-        return None
-
-def attempt_real_turnitin_submission(file_path, filename, options):
-    driver = None
-    try:
-        print("🎯 Attempting REAL Turnitin submission...")
-        
-        driver = setup_undetected_driver()
-        if not driver:
-            return None
-        
-        driver.get("https://www.turnitin.com/login_page.asp")
-        time.sleep(3)
-        
-        if "login" not in driver.current_url.lower():
-            print("❌ Not on login page, might be blocked")
-            return None
-        
-        email_field = driver.find_element("name", "email")
-        password_field = driver.find_element("name", "password")
-        
-        email_field.send_keys(TURNITIN_USERNAME)
-        password_field.send_keys(TURNITIN_PASSWORD)
-        
-        login_btn = driver.find_element("xpath", "//input[@type='submit']")
-        login_btn.click()
-        
-        time.sleep(5)
-        
-        if "login" in driver.current_url.lower():
-            print("❌ Login failed")
-            return None
-        
-        print("✅ Login successful, proceeding with submission...")
-        time.sleep(10)
-        
-        return {
-            "similarity_score": random.randint(8, 35),
-            "ai_score": random.randint(5, 25),
-            "success": True,
-            "source": "REAL_TURNITIN",
-            "screenshot_path": None
-        }
-        
-    except Exception as e:
-        print(f"❌ Real Turnitin attempt failed: {e}")
-        return None
-    finally:
-        if driver:
-            driver.quit()
-
+# SIMULATION helpers
 def analyze_document_content(file_path, filename):
     try:
         file_size = os.path.getsize(file_path)
@@ -829,7 +587,7 @@ CONFIDENCE: {max(75, 100 - scores['ai_score'])}%
         print(f"❌ Simulation error: {e}")
         return None
 
-# MAIN PROCESSING WITH AUTOMATIC FALLBACK
+# MAIN PROCESSING
 def process_document(submission_id, file_path, options):
     """Main processing with automatic fallback and cancellation checks"""
     user_id = None
@@ -854,9 +612,9 @@ def process_document(submission_id, file_path, options):
 
         send_telegram_message(user_id, "🚀 Starting document analysis...")
 
-        # ATTEMPT REAL TURNITIN FIRST, but check for cancellation before heavy work
-        turnitin_result = attempt_real_turnitin_submission(file_path, filename, options)
-        source = "REAL_TURNITIN" if turnitin_result else "ADVANCED_ANALYSIS"
+        # Use simulation approach
+        turnitin_result = submit_to_turnitin_simulation(file_path, filename, options)
+        source = "ADVANCED_ANALYSIS"
 
         # Check cancellation after attempt
         row = cur.execute("SELECT status FROM submissions WHERE id=?", (submission_id,)).fetchone()
@@ -871,10 +629,6 @@ def process_document(submission_id, file_path, options):
                         (submission_id, False, source, "Cancelled by user", now_ts()))
             db.commit()
             return
-
-        if not turnitin_result:
-            print("🔄 Real Turnitin failed, falling back to advanced analysis...")
-            turnitin_result = submit_to_turnitin_simulation(file_path, filename, options)
 
         if not turnitin_result:
             send_telegram_message(user_id, "❌ Analysis failed. Please try again.")
@@ -896,7 +650,7 @@ def process_document(submission_id, file_path, options):
         )
         db.commit()
 
-        source_text = "Real Turnitin" if source == "REAL_TURNITIN" else "Advanced Analysis"
+        source_text = "Advanced Analysis"
         caption = (
             f"✅ {source_text} Complete!\n\n"
             f"📊 Similarity Score: {turnitin_result['similarity_score']}%\n"
@@ -1054,6 +808,153 @@ def cancel_user_submission(user_id):
     db.commit()
     send_telegram_message(user_id, "❌ Your submission has been cancelled.")
     return True
+
+# Referral System Functions
+def generate_referral_code(user_id):
+    """Generate a unique referral code for user"""
+    import string
+    chars = string.ascii_uppercase + string.digits
+    code = f"TQ{user_id:04d}" + ''.join(random.choices(chars, k=4))
+    
+    # Ensure uniqueness
+    cur = db.cursor()
+    while cur.execute("SELECT 1 FROM referral_earnings WHERE referral_code=?", (code,)).fetchone():
+        code = f"TQ{user_id:04d}" + ''.join(random.choices(chars, k=4))
+    
+    return code
+
+def get_or_create_referral_earnings(user_id):
+    """Get or create referral earnings record for user"""
+    cur = db.cursor()
+    earnings = cur.execute(
+        "SELECT * FROM referral_earnings WHERE user_id=?", (user_id,)
+    ).fetchone()
+    
+    if not earnings:
+        referral_code = generate_referral_code(user_id)
+        cur.execute(
+            "INSERT INTO referral_earnings (user_id, referral_code, created_at) VALUES (?, ?, ?)",
+            (user_id, referral_code, now_ts())
+        )
+        db.commit()
+        earnings = cur.execute(
+            "SELECT * FROM referral_earnings WHERE user_id=?", (user_id,)
+        ).fetchone()
+    
+    return earnings
+
+def handle_referral_signup(referred_user_id, referral_code):
+    """Handle new user signup with referral code"""
+    cur = db.cursor()
+    
+    # Find referrer by code
+    referrer = cur.execute(
+        "SELECT user_id FROM referral_earnings WHERE referral_code=?", (referral_code,)
+    ).fetchone()
+    
+    if referrer:
+        referrer_id = referrer['user_id']
+        
+        # Check if this referred user already used any referral code
+        existing_ref = cur.execute(
+            "SELECT 1 FROM referrals WHERE referred_id=?", (referred_user_id,)
+        ).fetchone()
+        
+        if not existing_ref:
+            # Record the referral
+            cur.execute(
+                "INSERT INTO referrals (referrer_id, referred_id, referral_code, created_at) VALUES (?, ?, ?, ?)",
+                (referrer_id, referred_user_id, referral_code, now_ts())
+            )
+            db.commit()
+            return referrer_id
+    
+    return None
+
+def process_referral_payment(referred_user_id):
+    """Process referral reward when referred user makes first payment"""
+    cur = db.cursor()
+    
+    # Find referral record
+    referral = cur.execute(
+        "SELECT * FROM referrals WHERE referred_id=? AND reward_credited=0", (referred_user_id,)
+    ).fetchone()
+    
+    if referral:
+        referrer_id = referral['referrer_id']
+        
+        # Credit reward to referrer
+        cur.execute(
+            "UPDATE referral_earnings SET amount=amount+?, total_earned=total_earned+? WHERE user_id=?",
+            (REFERRAL_REWARD, REFERRAL_REWARD, referrer_id)
+        )
+        
+        # Mark referral as used and credited
+        cur.execute(
+            "UPDATE referrals SET reward_credited=1, used_at=? WHERE id=?",
+            (now_ts(), referral['id'])
+        )
+        
+        db.commit()
+        
+        # Notify referrer
+        send_telegram_message(
+            referrer_id,
+            f"🎉 Great news! Someone you referred just made their first payment.\n"
+            f"₵{REFERRAL_REWARD} has been added to your referral balance."
+        )
+        
+        return True
+    
+    return False
+
+def get_referral_info(user_id):
+    """Get user's referral information"""
+    earnings = get_or_create_referral_earnings(user_id)
+    
+    cur = db.cursor()
+    total_referrals = cur.execute(
+        "SELECT COUNT(*) as count FROM referrals WHERE referrer_id=?", (user_id,)
+    ).fetchone()['count']
+    
+    successful_referrals = cur.execute(
+        "SELECT COUNT(*) as count FROM referrals WHERE referrer_id=? AND reward_credited=1", (user_id,)
+    ).fetchone()['count']
+    
+    return {
+        'referral_code': earnings['referral_code'],
+        'balance': earnings['amount'],
+        'total_earned': earnings['total_earned'],
+        'total_withdrawn': earnings['total_withdrawn'],
+        'total_referrals': total_referrals,
+        'successful_referrals': successful_referrals
+    }
+
+def handle_withdrawal_request(user_id, mobile_money_number):
+    """Process withdrawal request"""
+    referral_info = get_referral_info(user_id)
+    balance = referral_info['balance']
+    
+    if balance < MIN_WITHDRAWAL:
+        return False, f"Withdrawal minimum is ₵{MIN_WITHDRAWAL}. Your balance: ₵{balance}"
+    
+    cur = db.cursor()
+    
+    # Create withdrawal record
+    cur.execute(
+        "INSERT INTO withdrawals (user_id, amount, mobile_money_number, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, balance, mobile_money_number, now_ts())
+    )
+    
+    # Update referral earnings
+    cur.execute(
+        "UPDATE referral_earnings SET amount=0, total_withdrawn=total_withdrawn+? WHERE user_id=?",
+        (balance, user_id)
+    )
+    
+    db.commit()
+    
+    return True, f"Withdrawal request for ₵{balance} submitted! We'll process it within 24 hours."
 
 # Flask Routes
 @app.route("/")
@@ -1699,11 +1600,9 @@ def paystack_webhook():
         traceback.print_exc()
         return jsonify({"status": "error"}), 500
 
-@app.route('/webhook/<path:bot_token>', methods=['POST', 'GET'])
+@app.route('/webhook/<path:bot_token>', methods=['POST'])
 def telegram_webhook(bot_token):
-    if request.method == "GET":
-        return "🤖 Webhook active! Send POST requests."
-    
+    """Main Telegram webhook handler"""
     try:
         update_data = request.get_json(force=True)
         
@@ -1749,7 +1648,7 @@ def telegram_webhook(bot_token):
                         send_telegram_message(user_id, "⚠️ Daily limit reached. Upgrade for more.")
                         return "ok", 200
 
-                    # Create submission record, but check queueing: if user has processing -> queue
+                    # Create submission record
                     cur.execute(
                         "INSERT INTO submissions(user_id, filename, status, created_at, options, is_free_check) VALUES(?,?,?,?,?,?)",
                         (user_id, session['current_filename'], "created", created, json.dumps(options), is_free_check)
