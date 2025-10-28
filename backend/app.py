@@ -729,7 +729,7 @@ def process_document(submission_id, file_path, options):
                 user_id, 
                 turnitin_result["similarity_report_path"], 
                 caption=caption,
-                filename=f"report_{filename}.pdf"
+                filename=f"report_{filename}.txt"
             )
         
         # Only send AI report to paid users (or to a free user if it was their free check)
@@ -739,7 +739,7 @@ def process_document(submission_id, file_path, options):
                 user_id,
                 turnitin_result["ai_report_path"],
                 caption="🤖 AI Writing Analysis",
-                filename=f"ai_analysis_{filename}.pdf"
+                filename=f"ai_analysis_{filename}.txt"
             )
         
         if is_free_check:
