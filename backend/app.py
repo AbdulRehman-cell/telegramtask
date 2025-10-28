@@ -352,6 +352,16 @@ def get_payment_page_url(plan, user_id):
 
 def handle_payment_selection(user_id, plan):
     """Handle payment selection with automatic activation setup"""
+    # FIX: Extract just the plan name if it contains prefixes
+    if plan.startswith('details_'):
+        plan = plan.replace('details_', '')
+    elif plan.startswith('plan_'):
+        plan = plan.replace('plan_', '')
+    
+    if plan not in PLANS:
+        send_telegram_message(user_id, "❌ Invalid plan selected. Please try again.")
+        return
+        
     plan_data = PLANS[plan]
     
     # Get payment page URL with Telegram ID
@@ -1842,12 +1852,23 @@ def telegram_webhook(bot_token):
             user_id = callback['from']['id']
             data = callback['data']
             
+            print(f"🔘 Callback data: {data}")
+            
+            # FIXED: Handle all plan-related callbacks properly
             if data.startswith("plan_"):
                 plan = data.replace("plan_", "")
+                # FIX: Remove any additional prefixes
+                if plan.startswith('details_'):
+                    plan = plan.replace('details_', '')
                 handle_payment_selection(user_id, plan)
                     
             elif data.startswith("plan_details_"):
                 plan = data.replace("plan_details_", "")
+                # FIX: Ensure we have a valid plan name
+                if plan not in PLANS:
+                    send_telegram_message(user_id, "❌ Invalid plan selected. Please try again.")
+                    return "ok", 200
+                    
                 plan_data = PLANS[plan]
                 
                 features_text = "\n".join(f"✅ {feature}" for feature in plan_data["features"])
