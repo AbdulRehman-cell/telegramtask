@@ -9,7 +9,6 @@ from pathlib import Path
 import hashlib
 import random
 import hmac
-import hashlib
 from typing import Optional
 
 from flask import Flask, request, jsonify
@@ -49,16 +48,15 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
 
-# Database setup
+# Database setup - FIXED: Remove global connection
 def get_db():
     conn = sqlite3.connect(DATABASE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-db = get_db()
-
 def init_db():
-    cur = db.cursor()
+    conn = get_db()
+    cur = conn.cursor()
     cur.executescript("""
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
@@ -145,15 +143,18 @@ def init_db():
         processed_at INTEGER
     );
     """)
-    db.commit()
+    conn.commit()
+    conn.close()
 
 init_db()
 
 # Initialize global daily allocation
-if not db.execute("SELECT 1 FROM meta WHERE k='global_alloc'").fetchone():
-    db.execute("INSERT INTO meta(k,v) VALUES('global_alloc','0')")
-    db.execute("INSERT INTO meta(k,v) VALUES('global_max','50')")
-    db.commit()
+conn = get_db()
+if not conn.execute("SELECT 1 FROM meta WHERE k='global_alloc'").fetchone():
+    conn.execute("INSERT INTO meta(k,v) VALUES('global_alloc','0')")
+    conn.execute("INSERT INTO meta(k,v) VALUES('global_max','50')")
+    conn.commit()
+conn.close()
 
 # Plan Configuration
 PLANS = {
@@ -207,38 +208,40 @@ def generate_referral_code(user_id):
     code = f"TQ{user_id:04d}" + ''.join(random.choices(chars, k=4))
     
     # Ensure uniqueness
-    cur = db.cursor()
-    while cur.execute("SELECT 1 FROM referral_earnings WHERE referral_code=?", (code,)).fetchone():
+    conn = get_db()
+    while conn.execute("SELECT 1 FROM referral_earnings WHERE referral_code=?", (code,)).fetchone():
         code = f"TQ{user_id:04d}" + ''.join(random.choices(chars, k=4))
+    conn.close()
     
     return code
 
 def get_or_create_referral_earnings(user_id):
     """Get or create referral earnings record for user"""
-    cur = db.cursor()
-    earnings = cur.execute(
+    conn = get_db()
+    earnings = conn.execute(
         "SELECT * FROM referral_earnings WHERE user_id=?", (user_id,)
     ).fetchone()
     
     if not earnings:
         referral_code = generate_referral_code(user_id)
-        cur.execute(
+        conn.execute(
             "INSERT INTO referral_earnings (user_id, referral_code, created_at) VALUES (?, ?, ?)",
             (user_id, referral_code, now_ts())
         )
-        db.commit()
-        earnings = cur.execute(
+        conn.commit()
+        earnings = conn.execute(
             "SELECT * FROM referral_earnings WHERE user_id=?", (user_id,)
         ).fetchone()
     
+    conn.close()
     return earnings
 
 def handle_referral_signup(referred_user_id, referral_code):
     """Handle new user signup with referral code"""
-    cur = db.cursor()
+    conn = get_db()
     
     # Find referrer by code
-    referrer = cur.execute(
+    referrer = conn.execute(
         "SELECT user_id FROM referral_earnings WHERE referral_code=?", (referral_code,)
     ).fetchone()
     
@@ -246,27 +249,29 @@ def handle_referral_signup(referred_user_id, referral_code):
         referrer_id = referrer['user_id']
         
         # Check if this referred user already used any referral code
-        existing_ref = cur.execute(
+        existing_ref = conn.execute(
             "SELECT 1 FROM referrals WHERE referred_id=?", (referred_user_id,)
         ).fetchone()
         
         if not existing_ref:
             # Record the referral
-            cur.execute(
+            conn.execute(
                 "INSERT INTO referrals (referrer_id, referred_id, referral_code, created_at) VALUES (?, ?, ?, ?)",
                 (referrer_id, referred_user_id, referral_code, now_ts())
             )
-            db.commit()
+            conn.commit()
+            conn.close()
             return referrer_id
     
+    conn.close()
     return None
 
 def process_referral_payment(referred_user_id):
     """Process referral reward when referred user makes first payment"""
-    cur = db.cursor()
+    conn = get_db()
     
     # Find referral record
-    referral = cur.execute(
+    referral = conn.execute(
         "SELECT * FROM referrals WHERE referred_id=? AND reward_credited=0", (referred_user_id,)
     ).fetchone()
     
@@ -274,18 +279,19 @@ def process_referral_payment(referred_user_id):
         referrer_id = referral['referrer_id']
         
         # Credit reward to referrer
-        cur.execute(
+        conn.execute(
             "UPDATE referral_earnings SET amount=amount+?, total_earned=total_earned+? WHERE user_id=?",
             (REFERRAL_REWARD, REFERRAL_REWARD, referrer_id)
         )
         
         # Mark referral as used and credited
-        cur.execute(
+        conn.execute(
             "UPDATE referrals SET reward_credited=1, used_at=? WHERE id=?",
             (now_ts(), referral['id'])
         )
         
-        db.commit()
+        conn.commit()
+        conn.close()
         
         # Notify referrer
         send_telegram_message(
@@ -296,20 +302,22 @@ def process_referral_payment(referred_user_id):
         
         return True
     
+    conn.close()
     return False
 
 def get_referral_info(user_id):
     """Get user's referral information"""
     earnings = get_or_create_referral_earnings(user_id)
     
-    cur = db.cursor()
-    total_referrals = cur.execute(
+    conn = get_db()
+    total_referrals = conn.execute(
         "SELECT COUNT(*) as count FROM referrals WHERE referrer_id=?", (user_id,)
     ).fetchone()['count']
     
-    successful_referrals = cur.execute(
+    successful_referrals = conn.execute(
         "SELECT COUNT(*) as count FROM referrals WHERE referrer_id=? AND reward_credited=1", (user_id,)
     ).fetchone()['count']
+    conn.close()
     
     return {
         'referral_code': earnings['referral_code'],
@@ -328,21 +336,22 @@ def handle_withdrawal_request(user_id, mobile_money_number):
     if balance < MIN_WITHDRAWAL:
         return False, f"Withdrawal minimum is ₵{MIN_WITHDRAWAL}. Your balance: ₵{balance}"
     
-    cur = db.cursor()
+    conn = get_db()
     
     # Create withdrawal record
-    cur.execute(
+    conn.execute(
         "INSERT INTO withdrawals (user_id, amount, mobile_money_number, created_at) VALUES (?, ?, ?, ?)",
         (user_id, balance, mobile_money_number, now_ts())
     )
     
     # Update referral earnings
-    cur.execute(
+    conn.execute(
         "UPDATE referral_earnings SET amount=0, total_withdrawn=total_withdrawn+? WHERE user_id=?",
         (balance, user_id)
     )
     
-    db.commit()
+    conn.commit()
+    conn.close()
     
     return True, f"Withdrawal request for ₵{balance} submitted! We'll process it within 24 hours."
 
@@ -351,47 +360,53 @@ def now_ts():
     return int(time.time())
 
 def user_get(user_id):
-    cur = db.cursor()
-    r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+    conn = get_db()
+    r = conn.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     if not r:
-        cur.execute("INSERT INTO users(user_id, created_at) VALUES(?, ?)", (user_id, now_ts()))
-        db.commit()
-        r = cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+        conn.execute("INSERT INTO users(user_id, created_at) VALUES(?, ?)", (user_id, now_ts()))
+        conn.commit()
+        r = conn.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
     return r
 
 def get_user_session(user_id):
-    cur = db.cursor()
-    r = cur.execute("SELECT * FROM user_sessions WHERE user_id=?", (user_id,)).fetchone()
+    conn = get_db()
+    r = conn.execute("SELECT * FROM user_sessions WHERE user_id=?", (user_id,)).fetchone()
     if not r:
-        cur.execute("INSERT INTO user_sessions(user_id) VALUES(?)", (user_id,))
-        db.commit()
-        r = cur.execute("SELECT * FROM user_sessions WHERE user_id=?", (user_id,)).fetchone()
+        conn.execute("INSERT INTO user_sessions(user_id) VALUES(?)", (user_id,))
+        conn.commit()
+        r = conn.execute("SELECT * FROM user_sessions WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
     return r
 
 def update_user_session(user_id, **kwargs):
-    cur = db.cursor()
+    conn = get_db()
     set_clause = ", ".join([f"{k}=?" for k in kwargs.keys()])
     values = list(kwargs.values()) + [user_id]
-    cur.execute(f"UPDATE user_sessions SET {set_clause} WHERE user_id=?", values)
-    db.commit()
+    conn.execute(f"UPDATE user_sessions SET {set_clause} WHERE user_id=?", values)
+    conn.commit()
+    conn.close()
 
 def allowed_file(filename):
     return filename.lower().endswith((".pdf", ".docx"))
 
 def global_alloc():
-    cur = db.cursor()
-    r = cur.execute("SELECT v FROM meta WHERE k='global_alloc'").fetchone()
+    conn = get_db()
+    r = conn.execute("SELECT v FROM meta WHERE k='global_alloc'").fetchone()
+    conn.close()
     return int(r['v']) if r else 0
 
 def global_max():
-    cur = db.cursor()
-    r = cur.execute("SELECT v FROM meta WHERE k='global_max'").fetchone()
+    conn = get_db()
+    r = conn.execute("SELECT v FROM meta WHERE k='global_max'").fetchone()
+    conn.close()
     return int(r['v']) if r else 50
 
 def update_global_alloc(value):
-    cur = db.cursor()
-    cur.execute("UPDATE meta SET v=? WHERE k='global_alloc'", (str(value),))
-    db.commit()
+    conn = get_db()
+    conn.execute("UPDATE meta SET v=? WHERE k='global_alloc'", (str(value),))
+    conn.commit()
+    conn.close()
 
 # Telegram API
 def send_telegram_message(chat_id, text, reply_markup=None):
@@ -548,109 +563,48 @@ def handle_payment_selection(user_id, plan):
         send_telegram_message(user_id, "❌ Payment system temporarily unavailable. Please try again later.")
 
 def activate_user_subscription(user_id, plan):
-    """Activate user's subscription after successful payment"""
+    """Activate user's subscription after successful payment - FIXED"""
     try:
-        cur = db.cursor()
+        conn = get_db()
         plan_data = PLANS[plan]
         
         # Calculate expiry date
         expiry_date = (datetime.datetime.now() + datetime.timedelta(days=plan_data['duration_days'])).strftime('%Y-%m-%d %H:%M:%S')
         
         # Update user plan
-        cur.execute(
+        conn.execute(
             "UPDATE users SET plan=?, daily_limit=?, expiry_date=?, used_today=0, subscription_active=1 WHERE user_id=?",
             (plan, plan_data['daily_limit'], expiry_date, user_id)
         )
         
-        db.commit()
+        conn.commit()
+        conn.close()
         
         # Process referral reward if this is user's first payment
         process_referral_payment(user_id)
         
         print(f"✅ Subscription activated for user {user_id}, plan {plan}")
+        
+        # Send confirmation message to user
+        user_data = user_get(user_id)
+        plan_name = PLANS[user_data['plan']]['name'] if user_data['plan'] in PLANS else user_data['plan'].title()
+        
+        success_message = (
+            f"🎉 Subscription Activated!\n\n"
+            f"✅ Your {plan_name} plan is now active!\n"
+            f"📅 Expires: {expiry_date}\n"
+            f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
+            f"Thank you for your payment!"
+        )
+        send_telegram_message(user_id, success_message)
+        
         return expiry_date
         
     except Exception as e:
         print(f"❌ Subscription activation error: {e}")
         return None
 
-# REAL TURNITIN / SIMULATION helpers
-def setup_undetected_driver():
-    try:
-        import undetected_chromedriver as uc
-        
-        print("🚀 Setting up undetected Chrome driver...")
-        
-        options = uc.ChromeOptions()
-        options.add_argument('--headless=new')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-        
-        driver = uc.Chrome(options=options, driver_executable_path=None)
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
-        print("✅ Undetected Chrome driver setup complete")
-        return driver
-        
-    except Exception as e:
-        print(f"❌ Undetected Chrome setup failed: {e}")
-        return None
-
-def attempt_real_turnitin_submission(file_path, filename, options):
-    driver = None
-    try:
-        print("🎯 Attempting REAL Turnitin submission...")
-        
-        driver = setup_undetected_driver()
-        if not driver:
-            return None
-        
-        driver.get("https://www.turnitin.com/login_page.asp")
-        time.sleep(3)
-        
-        if "login" not in driver.current_url.lower():
-            print("❌ Not on login page, might be blocked")
-            return None
-        
-        email_field = driver.find_element("name", "email")
-        password_field = driver.find_element("name", "password")
-        
-        email_field.send_keys(TURNITIN_USERNAME)
-        password_field.send_keys(TURNITIN_PASSWORD)
-        
-        login_btn = driver.find_element("xpath", "//input[@type='submit']")
-        login_btn.click()
-        
-        time.sleep(5)
-        
-        if "login" in driver.current_url.lower():
-            print("❌ Login failed")
-            return None
-        
-        print("✅ Login successful, proceeding with submission...")
-        time.sleep(10)
-        
-        return {
-            "similarity_score": random.randint(8, 35),
-            "ai_score": random.randint(5, 25),
-            "success": True,
-            "source": "REAL_TURNITIN",
-            "screenshot_path": None
-        }
-        
-    except Exception as e:
-        print(f"❌ Real Turnitin attempt failed: {e}")
-        return None
-    finally:
-        if driver:
-            driver.quit()
-
+# SIMULATION helpers only - REMOVED undetected_chromedriver dependency
 def analyze_document_content(file_path, filename):
     try:
         file_size = os.path.getsize(file_path)
@@ -831,37 +785,39 @@ CONFIDENCE: {max(75, 100 - scores['ai_score'])}%
         print(f"❌ Simulation error: {e}")
         return None
 
-# MAIN PROCESSING WITH AUTOMATIC FALLBACK
+# MAIN PROCESSING WITH SIMULATION ONLY
 def process_document(submission_id, file_path, options):
-    """Main processing with automatic fallback and cancellation checks"""
+    """Main processing with simulation only"""
     user_id = None
     try:
-        cur = db.cursor()
+        conn = get_db()
         # mark processing (only if still queued)
-        cur.execute("UPDATE submissions SET status=? WHERE id=? AND status IN ('queued','created')", ("processing", submission_id))
-        db.commit()
+        conn.execute("UPDATE submissions SET status=? WHERE id=? AND status IN ('queued','created')", ("processing", submission_id))
+        conn.commit()
 
-        r = cur.execute("SELECT user_id, filename, is_free_check, status FROM submissions WHERE id=?", (submission_id,)).fetchone()
+        r = conn.execute("SELECT user_id, filename, is_free_check, status FROM submissions WHERE id=?", (submission_id,)).fetchone()
         if not r:
+            conn.close()
             return
         user_id = r["user_id"]
         filename = r["filename"]
         is_free_check = r["is_free_check"]
 
         # Check if cancelled
-        row = cur.execute("SELECT status FROM submissions WHERE id=?", (submission_id,)).fetchone()
+        row = conn.execute("SELECT status FROM submissions WHERE id=?", (submission_id,)).fetchone()
         if row and row['status'] == 'cancelled':
             send_telegram_message(user_id, "❌ Your submission was cancelled before processing began.")
+            conn.close()
             return
 
         send_telegram_message(user_id, "🚀 Starting document analysis...")
 
-        # ATTEMPT REAL TURNITIN FIRST, but check for cancellation before heavy work
-        turnitin_result = attempt_real_turnitin_submission(file_path, filename, options)
-        source = "REAL_TURNITIN" if turnitin_result else "ADVANCED_ANALYSIS"
+        # Use simulation only (removed undetected_chromedriver dependency)
+        turnitin_result = submit_to_turnitin_simulation(file_path, filename, options)
+        source = "ADVANCED_ANALYSIS"
 
         # Check cancellation after attempt
-        row = cur.execute("SELECT status FROM submissions WHERE id=?", (submission_id,)).fetchone()
+        row = conn.execute("SELECT status FROM submissions WHERE id=?", (submission_id,)).fetchone()
         if row and row['status'] == 'cancelled':
             send_telegram_message(user_id, "❌ Your submission was cancelled during processing.")
             # ensure cleanup
@@ -869,36 +825,34 @@ def process_document(submission_id, file_path, options):
                 os.remove(file_path)
             except:
                 pass
-            cur.execute("INSERT INTO turnitin_logs (submission_id, success, source, error_message, created_at) VALUES (?, ?, ?, ?, ?)",
+            conn.execute("INSERT INTO turnitin_logs (submission_id, success, source, error_message, created_at) VALUES (?, ?, ?, ?, ?)",
                         (submission_id, False, source, "Cancelled by user", now_ts()))
-            db.commit()
+            conn.commit()
+            conn.close()
             return
-
-        if not turnitin_result:
-            print("🔄 Real Turnitin failed, falling back to advanced analysis...")
-            turnitin_result = submit_to_turnitin_simulation(file_path, filename, options)
 
         if not turnitin_result:
             send_telegram_message(user_id, "❌ Analysis failed. Please try again.")
-            cur.execute("UPDATE submissions SET status=? WHERE id=?", ("failed", submission_id))
-            db.commit()
+            conn.execute("UPDATE submissions SET status=? WHERE id=?", ("failed", submission_id))
+            conn.commit()
+            conn.close()
             return
 
         # Update database
-        cur.execute(
+        conn.execute(
             "UPDATE submissions SET status=?, report_path=?, similarity_score=?, ai_score=?, source=? WHERE id=?",
             ("done", turnitin_result.get("similarity_report_path"), turnitin_result["similarity_score"], 
              turnitin_result["ai_score"], source, submission_id)
         )
         
         # Log the attempt
-        cur.execute(
+        conn.execute(
             "INSERT INTO turnitin_logs (submission_id, success, source, error_message, created_at) VALUES (?, ?, ?, ?, ?)",
             (submission_id, True, source, "Success", now_ts())
         )
-        db.commit()
+        conn.commit()
 
-        source_text = "Real Turnitin" if source == "REAL_TURNITIN" else "Advanced Analysis"
+        source_text = "Advanced Analysis"
         caption = (
             f"✅ {source_text} Complete!\n\n"
             f"📊 Similarity Score: {turnitin_result['similarity_score']}%\n"
@@ -946,15 +900,18 @@ def process_document(submission_id, file_path, options):
         except Exception:
             pass
             
+        conn.close()
+            
     except Exception as e:
         print(f"❌ Processing error: {e}")
         if user_id:
             send_telegram_message(user_id, "❌ Processing error. Please try again.")
         try:
             # mark as failed
-            cur = db.cursor()
-            cur.execute("UPDATE submissions SET status=? WHERE id=?", ("failed", submission_id))
-            db.commit()
+            conn = get_db()
+            conn.execute("UPDATE submissions SET status=? WHERE id=?", ("failed", submission_id))
+            conn.commit()
+            conn.close()
         except:
             pass
 
@@ -994,15 +951,17 @@ def parse_options_response(text):
 scheduler = BackgroundScheduler()
 
 def reset_daily_usage():
-    db.execute("UPDATE users SET used_today=0")
-    db.execute("UPDATE meta SET v='0' WHERE k='global_alloc'")
-    db.commit()
+    conn = get_db()
+    conn.execute("UPDATE users SET used_today=0")
+    conn.execute("UPDATE meta SET v='0' WHERE k='global_alloc'")
+    conn.commit()
+    conn.close()
     print("🔄 Daily usage reset")
 
 def check_and_expire_subscriptions():
     """Daily job: find expired subscriptions and notify users"""
-    cur = db.cursor()
-    rows = cur.execute("SELECT user_id, plan, expiry_date FROM users WHERE subscription_active=1 AND expiry_date IS NOT NULL").fetchall()
+    conn = get_db()
+    rows = conn.execute("SELECT user_id, plan, expiry_date FROM users WHERE subscription_active=1 AND expiry_date IS NOT NULL").fetchall()
     now = datetime.datetime.now()
     for r in rows:
         try:
@@ -1013,13 +972,14 @@ def check_and_expire_subscriptions():
             if expiry_dt < now:
                 user_id = r['user_id']
                 # Downgrade user to free and mark subscription inactive
-                cur.execute("UPDATE users SET plan='free', daily_limit=1, subscription_active=0, expiry_date=NULL WHERE user_id=?", (user_id,))
-                db.commit()
+                conn.execute("UPDATE users SET plan='free', daily_limit=1, subscription_active=0, expiry_date=NULL WHERE user_id=?", (user_id,))
+                conn.commit()
                 renew_keyboard = create_inline_keyboard([[("🔁 Renew Plan", "upgrade_after_free")]])
                 send_telegram_message(user_id, f"⏰ Your 28-day subscription has expired.\nRenew anytime to continue using TurnitQ.", reply_markup=renew_keyboard)
                 print(f"🔔 Notified user {user_id} of expiry")
         except Exception as e:
             print(f"❌ Expiry check error for row {r}: {e}")
+    conn.close()
 
 scheduler.add_job(reset_daily_usage, 'cron', hour=0)
 scheduler.add_job(check_and_expire_subscriptions, 'cron', hour=1)
@@ -1027,13 +987,15 @@ scheduler.start()
 
 # Small helpers for queueing & cancellation
 def user_has_active_processing(user_id) -> bool:
-    cur = db.cursor()
-    r = cur.execute("SELECT COUNT(*) AS c FROM submissions WHERE user_id=? AND status='processing'", (user_id,)).fetchone()
+    conn = get_db()
+    r = conn.execute("SELECT COUNT(*) AS c FROM submissions WHERE user_id=? AND status='processing'", (user_id,)).fetchone()
+    conn.close()
     return r['c'] > 0
 
 def user_has_queued_or_processing(user_id) -> int:
-    cur = db.cursor()
-    r = cur.execute("SELECT COUNT(*) AS c FROM submissions WHERE user_id=? AND status IN ('processing','queued')", (user_id,)).fetchone()
+    conn = get_db()
+    r = conn.execute("SELECT COUNT(*) AS c FROM submissions WHERE user_id=? AND status IN ('processing','queued')", (user_id,)).fetchone()
+    conn.close()
     return r['c']
 
 def queue_submission_notify(user_id):
@@ -1042,18 +1004,20 @@ def queue_submission_notify(user_id):
     send_telegram_message(user_id, message)
 
 def cancel_user_submission(user_id):
-    cur = db.cursor()
+    conn = get_db()
     # find latest processing or queued
-    r = cur.execute("SELECT * FROM submissions WHERE user_id=? AND status IN ('processing','queued') ORDER BY created_at DESC LIMIT 1", (user_id,)).fetchone()
+    r = conn.execute("SELECT * FROM submissions WHERE user_id=? AND status IN ('processing','queued') ORDER BY created_at DESC LIMIT 1", (user_id,)).fetchone()
     if not r:
         send_telegram_message(user_id, "⚠️ You have no active submissions to cancel.")
+        conn.close()
         return False
     sub_id = r['id']
-    cur.execute("UPDATE submissions SET status='cancelled' WHERE id=?", (sub_id,))
-    db.commit()
-    cur.execute("INSERT INTO turnitin_logs (submission_id, success, source, error_message, created_at) VALUES (?, ?, ?, ?, ?)",
+    conn.execute("UPDATE submissions SET status='cancelled' WHERE id=?", (sub_id,))
+    conn.commit()
+    conn.execute("INSERT INTO turnitin_logs (submission_id, success, source, error_message, created_at) VALUES (?, ?, ?, ?, ?)",
                 (sub_id, False, "USER_CANCEL", "Cancelled by user", now_ts()))
-    db.commit()
+    conn.commit()
+    conn.close()
     send_telegram_message(user_id, "❌ Your submission has been cancelled.")
     return True
 
@@ -1069,10 +1033,11 @@ def home():
 
 @app.route("/debug")
 def debug():
-    cur = db.cursor()
-    real_count = cur.execute("SELECT COUNT(*) FROM turnitin_logs WHERE source='REAL_TURNITIN'").fetchone()[0]
-    sim_count = cur.execute("SELECT COUNT(*) FROM turnitin_logs WHERE source='ADVANCED_ANALYSIS'").fetchone()[0]
-    payment_count = cur.execute("SELECT COUNT(*) FROM payments WHERE status='success'").fetchone()[0]
+    conn = get_db()
+    real_count = conn.execute("SELECT COUNT(*) FROM turnitin_logs WHERE source='REAL_TURNITIN'").fetchone()[0]
+    sim_count = conn.execute("SELECT COUNT(*) FROM turnitin_logs WHERE source='ADVANCED_ANALYSIS'").fetchone()[0]
+    payment_count = conn.execute("SELECT COUNT(*) FROM payments WHERE status='success'").fetchone()[0]
+    conn.close()
     
     return f"""
     <h1>Debug Information</h1>
@@ -1245,23 +1210,13 @@ def activate_subscription():
         
         if expiry_date:
             # Store payment record
-            cur = db.cursor()
-            cur.execute(
+            conn = get_db()
+            conn.execute(
                 "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (user_id, plan, PLANS[plan]['price'], reference, 'success', now_ts(), now_ts())
             )
-            db.commit()
-            
-            # Send confirmation to user
-            plan_data = PLANS[plan]
-            success_message = (
-                f"🎉 Subscription Activated!\n\n"
-                f"✅ Your {plan_data['name']} plan is now active!\n"
-                f"📅 Expires: {expiry_date}\n"
-                f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
-                f"Thank you for your payment!"
-            )
-            send_telegram_message(user_id, success_message)
+            conn.commit()
+            conn.close()
             
             return f'''
             <!DOCTYPE html>
@@ -1515,23 +1470,13 @@ def manual_activation():
         
         if expiry_date:
             # Store payment record
-            cur = db.cursor()
-            cur.execute(
+            conn = get_db()
+            conn.execute(
                 "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (user_id, plan, PLANS[plan]['price'], reference, 'success', now_ts(), now_ts())
             )
-            db.commit()
-            
-            # Send confirmation to user
-            plan_data = PLANS[plan]
-            success_message = (
-                f"🎉 Subscription Activated!\n\n"
-                f"✅ Your {plan_data['name']} plan is now active!\n"
-                f"📅 Expires: {expiry_date}\n"
-                f"🔓 Daily checks: {plan_data['daily_limit']}\n\n"
-                f"Thank you for your payment!"
-            )
-            send_telegram_message(user_id, success_message)
+            conn.commit()
+            conn.close()
             
             return f'''
             <h2>✅ Subscription Activated!</h2>
@@ -1571,7 +1516,6 @@ def paystack_webhook():
         event = data.get('event')
         
         print(f"📨 Received Paystack webhook: {event}")
-        print(f"📊 Full webhook data: {json.dumps(data, indent=2)}")
         
         if event == 'charge.success':
             payment_data = data.get('data', {})
@@ -1582,9 +1526,6 @@ def paystack_webhook():
             custom_fields = payment_data.get('custom_fields', [])
             
             print(f"💰 Payment successful - Reference: {reference}, Amount: ${amount}")
-            print(f"📧 Customer email: {customer_email}")
-            print(f"📋 Custom fields: {custom_fields}")
-            print(f"📝 Metadata: {metadata}")
             
             # Extract user info from multiple sources
             user_id = None
@@ -1592,7 +1533,6 @@ def paystack_webhook():
             
             # METHOD 1: Extract from custom_fields (Primary method for payment pages)
             for field in custom_fields:
-                print(f"🔍 Checking field: {field}")
                 variable_name = field.get('variable_name', '').lower()
                 value = field.get('value', '')
                 
@@ -1617,7 +1557,6 @@ def paystack_webhook():
             
             # METHOD 3: Extract from customer email (fallback)
             if not user_id and customer_email:
-                print(f"🔍 Checking email for Telegram ID: {customer_email}")
                 if customer_email.startswith('user') and '@turnitq.com' in customer_email:
                     try:
                         user_id = int(customer_email.replace('user', '').replace('@turnitq.com', ''))
@@ -1651,55 +1590,18 @@ def paystack_webhook():
                         else:
                             return jsonify({"status": "error", "message": "Invalid plan"}), 400
                     
-                    # Verify payment amount matches plan price (allow small differences for currency conversion)
-                    plan_data = PLANS[plan]
-                    expected_amount = plan_data['price']
-                    
-                    if abs(amount - expected_amount) > 5:  # Allow $5 difference
-                        print(f"⚠️ Amount mismatch: paid ${amount}, expected ${expected_amount}")
-                        # Continue anyway as amount might be in different currency
-                    
-                    # Check if user already has this plan active
-                    user = user_get(user_id)
-                    if user and user['plan'] == plan and user['subscription_active']:
-                        print(f"ℹ️ User {user_id} already has active {plan} plan")
-                        # Still record the payment and notify user
-                        cur = db.cursor()
-                        cur.execute(
-                            "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (user_id, plan, amount, reference, 'success', now_ts(), now_ts())
-                        )
-                        db.commit()
-                        
-                        send_telegram_message(user_id, 
-                            f"✅ Payment received! Your {plan} plan is already active.\n"
-                            f"💰 Amount: ${amount}\n"
-                            f"📅 Your subscription remains active until: {user['expiry_date']}"
-                        )
-                        return jsonify({"status": "already_active"}), 200
-                    
                     # ACTIVATE SUBSCRIPTION AUTOMATICALLY
                     expiry_date = activate_user_subscription(user_id, plan)
                     if expiry_date:
                         # Store payment record
-                        cur = db.cursor()
-                        cur.execute(
+                        conn = get_db()
+                        conn.execute(
                             "INSERT INTO payments (user_id, plan, amount, reference, status, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                             (user_id, plan, amount, reference, 'success', now_ts(), now_ts())
                         )
-                        db.commit()
+                        conn.commit()
+                        conn.close()
                         
-                        # Send automatic confirmation to user
-                        success_message = (
-                            f"🎉 Payment Verified & Activated!\n\n"
-                            f"✅ Your {plan_data['name']} plan is now ACTIVE!\n"
-                            f"📅 Expires: {expiry_date}\n"
-                            f"🔓 Daily checks: {plan_data['daily_limit']}\n"
-                            f"💰 Amount: ${amount}\n\n"
-                            f"🚀 You can now use all premium features immediately!\n"
-                            f"📄 Upload a document to get started."
-                        )
-                        send_telegram_message(user_id, success_message)
                         print(f"✅ Subscription auto-activated for user {user_id}, plan {plan}")
                         
                         return jsonify({
@@ -1721,23 +1623,10 @@ def paystack_webhook():
                     return jsonify({"status": "invalid_user_id"}), 400
             else:
                 print(f"❌ Missing user_id or plan in webhook")
-                print(f"User ID: {user_id}, Plan: {plan}")
-                print(f"Custom fields: {custom_fields}")
-                print(f"Metadata: {metadata}")
-                
-                # Log this for debugging
-                cur = db.cursor()
-                cur.execute(
-                    "INSERT INTO payments (plan, amount, reference, status, created_at, error_data) VALUES (?, ?, ?, ?, ?, ?)",
-                    (plan or 'unknown', amount, reference, 'missing_data', now_ts(), json.dumps({'custom_fields': custom_fields, 'metadata': metadata}))
-                )
-                db.commit()
-                
                 return jsonify({"status": "missing_data"}), 400
         
         elif event == 'charge.failed':
             print(f"❌ Payment failed: {data}")
-            # You could notify the user here if you have their ID
             return jsonify({"status": "payment_failed"}), 200
             
         else:
@@ -1757,6 +1646,7 @@ def telegram_webhook(bot_token):
     
     try:
         update_data = request.get_json(force=True)
+        print(f"📨 Received update: {update_data}")
         
         if 'message' in update_data:
             message = update_data['message']
@@ -1781,7 +1671,7 @@ def telegram_webhook(bot_token):
                 if options:
                     update_user_session(user_id, waiting_for_options=0)
                     created = now_ts()
-                    cur = db.cursor()
+                    conn = get_db()
                     
                     user_data = user_get(user_id)
                     is_free_check = (user_data['free_checks_used'] == 0 and user_data['plan'] == 'free')
@@ -1793,44 +1683,47 @@ def telegram_webhook(bot_token):
                             [("💰 Earn ₵10 per Referral", "show_referral")]
                         ])
                         send_telegram_message(user_id, "⚠️ You've already used your free check. Subscribe to continue using TurnitQ or earn ₵10 per referral!", reply_markup=upgrade_keyboard)
+                        conn.close()
                         return "ok", 200
                     
                     # Check daily limit
                     if user_data['used_today'] >= user_data['daily_limit']:
                         send_telegram_message(user_id, "⚠️ Daily limit reached. Upgrade for more.")
+                        conn.close()
                         return "ok", 200
 
-                    # Create submission record, but check queueing: if user has processing -> queue
-                    cur.execute(
+                    # Create submission record
+                    conn.execute(
                         "INSERT INTO submissions(user_id, filename, status, created_at, options, is_free_check) VALUES(?,?,?,?,?,?)",
                         (user_id, session['current_filename'], "created", created, json.dumps(options), is_free_check)
                     )
-                    sub_id = cur.lastrowid
+                    sub_id = conn.lastrowid
 
                     # update counters
-                    cur.execute(
+                    conn.execute(
                         "UPDATE users SET last_submission=?, used_today=used_today+1, free_checks_used=free_checks_used+? WHERE user_id=?",
                         (created, 1 if is_free_check else 0, user_id)
                     )
-                    db.commit()
+                    conn.commit()
 
                     local_path = str(TEMP_DIR / f"{user_id}_{now_ts()}_{session['current_filename']}")
                     if download_telegram_file(session['current_file_id'], local_path):
                         send_telegram_message(user_id, "✅ File received. Preparing analysis...")
 
-                        # Queue logic: if user already has a processing submission -> set this to queued and notify
+                        # Queue logic
                         if user_has_active_processing(user_id):
-                            cur.execute("UPDATE submissions SET status='queued' WHERE id=?", (sub_id,))
-                            db.commit()
+                            conn.execute("UPDATE submissions SET status='queued' WHERE id=?", (sub_id,))
+                            conn.commit()
                             queue_submission_notify(user_id)
                         else:
                             # start processing immediately
-                            cur.execute("UPDATE submissions SET status='processing' WHERE id=?", (sub_id,))
-                            db.commit()
+                            conn.execute("UPDATE submissions SET status='processing' WHERE id=?", (sub_id,))
+                            conn.commit()
                             start_processing(sub_id, local_path, options)
                     else:
                         send_telegram_message(user_id, "❌ File download failed.")
                     
+                    conn.close()
                     return "ok", 200
                 else:
                     send_telegram_message(user_id, "❌ Invalid format. Use: Yes, No, Yes, Yes")
@@ -2170,6 +2063,8 @@ def telegram_webhook(bot_token):
         
     except Exception as e:
         print(f"❌ Webhook error: {e}")
+        import traceback
+        traceback.print_exc()
         return "error", 500
 
 def setup_webhook():
